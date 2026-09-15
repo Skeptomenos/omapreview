@@ -33,6 +33,11 @@ Destructive MCP tools (`place_signature`, `delete_pages`, `redact`,
   (`rects`, `rect`, `page`) and `"applied": true|false` (false = dry run).
 - Validation is strict: unknown ops, missing keys, and unmatched text fail
   the whole batch before anything is written.
+- A non-dry-run batch applies every operation to a disposable document first.
+  The main output is published only after the complete operation sequence and
+  serialization succeed. In-place saves use an atomic replacement and keep
+  the source file private (`0600`). Existing PDF encryption and permissions
+  are retained; password-protected files that cannot be opened are rejected.
 
 ## Operations
 
@@ -153,6 +158,18 @@ pixels. Report includes `inserted` and which variant was used.
 ```
 Writes selected pages to `to`. Does not modify the source document. Report:
 `{ "pages": [...], "to": "excerpt.pdf" }`.
+
+Extraction is staged until the complete batch succeeds. The source remains
+byte-identical for an extract-only request. The source and all extraction
+destinations must be distinct files; aliases and duplicate extraction
+destinations are rejected before any write. When a main output is requested,
+it must also be distinct from every extraction destination. The main output
+may be the source path for an in-place save. Extracting an encrypted source is
+rejected because a new excerpt cannot preserve the source's owner password and
+permission settings without the original credentials. When one batch publishes
+several independent outputs, operation application is atomic, but the final
+filesystem renames are separate: an unusual failure during that publication
+phase can leave earlier destination renames in place.
 
 ### redact
 ```json

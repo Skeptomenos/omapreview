@@ -17,7 +17,6 @@ import io
 import json
 import math
 import os
-import shutil
 import sys
 from pathlib import Path
 
@@ -43,7 +42,7 @@ from . import gui_pages
 from . import theme as chrome_theme
 from .crop_coords import transform_pending_for_crop
 from .export_guard import unsaved_export_reason
-from .fs_privacy import chmod_private_file
+from .fs_privacy import atomic_write_private
 from . import signature as sig_store
 from .ops import OpError
 from .page_preview import (
@@ -612,64 +611,149 @@ class Editor:
         self.redo_stack.clear()
 
     def _restore_file(self, data: bytes):
+        """Restore a saved byte snapshot without truncating the live file."""
         if not self.path:
             raise OpError("no PDF open — Open a file from the editor (Ctrl+O)")
+        try:
+            probe = pymupdf.open(stream=data, filetype="pdf")
+            probe.close()
+        except Exception as exc:
+            raise OpError(f"cannot restore invalid PDF bytes: {exc}") from exc
+
+        path = Path(self.path)
+        before = path.read_bytes()
         if self.doc is not None and not self.doc.is_closed:
             self.doc.close()
-        Path(self.path).write_bytes(data)
-        chmod_private_file(self.path)
-        self.doc = pymupdf.open(self.path)
+        try:
+            atomic_write_private(path, data)
+            restored = pymupdf.open(self.path)
+        except BaseException:
+            # A staged write normally fails before publication.  If a
+            # post-rename observation fails, put the original bytes back
+            # before reopening the editor so history and the document agree.
+            try:
+                if path.read_bytes() != before:
+                    atomic_write_private(path, before)
+                self.doc = pymupdf.open(self.path)
+            except BaseException:
+                self.doc = None
+            self.invalidate_view()
+            raise
+        self.doc = restored
+        self.invalidate_view()
+
+    def _restore_editor_state(self, pending: list[dict], page_ops: list[dict]) -> None:
+        self.pending = copy.deepcopy(pending)
+        self.page_preview.page_ops = copy.deepcopy(page_ops)
+        preview = self.page_preview.rebuild()
+        preview.close()
+        self.invalidate_view()
+        self.selected = None
+
+    def _restore_model_after_history_failure(
+        self, pending: list[dict], page_ops: list[dict]
+    ) -> None:
+        self.pending = copy.deepcopy(pending)
+        self.page_preview.page_ops = copy.deepcopy(page_ops)
+        try:
+            preview = self.page_preview.rebuild()
+            preview.close()
+        except BaseException:
+            pass
         self.invalidate_view()
 
     def undo(self) -> bool:
         """Returns True when the file itself changed (a save was reverted)."""
         if not self.undo_stack:
             return False
-        entry = self.undo_stack.pop()
+        entry = self.undo_stack[-1]
         if entry["kind"] == "pending":
+            pending_before = copy.deepcopy(self.pending)
+            page_ops_before = copy.deepcopy(self.page_preview.page_ops)
+            try:
+                self._restore_editor_state(
+                    entry["pending"], entry.get("page_ops", [])
+                )
+            except BaseException:
+                self._restore_model_after_history_failure(
+                    pending_before, page_ops_before
+                )
+                raise
+            self.undo_stack.pop()
             self.redo_stack.append({
                 "kind": "pending",
-                "pending": self.pending,
-                "page_ops": copy.deepcopy(self.page_preview.page_ops),
+                "pending": pending_before,
+                "page_ops": page_ops_before,
             })
-            self.pending = entry["pending"]
-            self.page_preview.page_ops = copy.deepcopy(entry.get("page_ops", []))
-            self.page_preview.rebuild()
-            self.invalidate_view()
-            self.selected = None
             return False
+        file_before = Path(self.path).read_bytes()
+        pending_before = copy.deepcopy(self.pending)
+        page_ops_before = copy.deepcopy(self.page_preview.page_ops)
+        try:
+            self._restore_file(entry["file_before"])
+            self._restore_editor_state(
+                entry["pending_before"], entry.get("page_ops_before", [])
+            )
+        except BaseException:
+            try:
+                if Path(self.path).read_bytes() != file_before:
+                    self._restore_file(file_before)
+            except BaseException:
+                pass
+            self._restore_model_after_history_failure(
+                pending_before, page_ops_before
+            )
+            raise
+        self.undo_stack.pop()
         self.redo_stack.append(entry)
-        self._restore_file(entry["file_before"])
-        self.pending = copy.deepcopy(entry["pending_before"])
-        self.page_preview.page_ops = copy.deepcopy(entry.get("page_ops_before", []))
-        self.page_preview.rebuild()
-        self.invalidate_view()
-        self.selected = None
         return True
 
     def redo(self) -> bool:
         if not self.redo_stack:
             return False
-        entry = self.redo_stack.pop()
+        entry = self.redo_stack[-1]
         if entry["kind"] == "pending":
+            pending_before = copy.deepcopy(self.pending)
+            page_ops_before = copy.deepcopy(self.page_preview.page_ops)
+            try:
+                self._restore_editor_state(
+                    entry["pending"], entry.get("page_ops", [])
+                )
+            except BaseException:
+                self._restore_model_after_history_failure(
+                    pending_before, page_ops_before
+                )
+                raise
+            self.redo_stack.pop()
             self.undo_stack.append({
                 "kind": "pending",
-                "pending": self.pending,
-                "page_ops": copy.deepcopy(self.page_preview.page_ops),
+                "pending": pending_before,
+                "page_ops": page_ops_before,
             })
-            self.pending = entry["pending"]
-            self.page_preview.page_ops = copy.deepcopy(entry.get("page_ops", []))
-            self.page_preview.rebuild()
+            return False
+        file_before = Path(self.path).read_bytes()
+        pending_before = copy.deepcopy(self.pending)
+        page_ops_before = copy.deepcopy(self.page_preview.page_ops)
+        try:
+            self._restore_file(entry["file_after"])
+            self.pending = []
+            self.page_preview.clear()
+            preview = self.page_preview.rebuild()
+            preview.close()
             self.invalidate_view()
             self.selected = None
-            return False
+        except BaseException:
+            try:
+                if Path(self.path).read_bytes() != file_before:
+                    self._restore_file(file_before)
+            except BaseException:
+                pass
+            self._restore_model_after_history_failure(
+                pending_before, page_ops_before
+            )
+            raise
+        self.redo_stack.pop()
         self.undo_stack.append(entry)
-        self._restore_file(entry["file_after"])
-        self.pending = []
-        self.page_preview.clear()
-        self.page_preview.rebuild()
-        self.invalidate_view()
-        self.selected = None
         return True
 
     def adopt_document(self, path: str) -> None:
@@ -713,38 +797,33 @@ class Editor:
         if not markup_ops and not page_ops:
             raise OpError("nothing to save")
         redact_ops = [op for op in markup_ops if op["op"] == "redact"]
-        other_markup = [op for op in markup_ops if op["op"] != "redact"]
+        operations = page_ops + markup_ops
         source = Path(self.path)
         file_before = source.read_bytes()
         pending_before = copy.deepcopy(self.pending)
         page_ops_before = copy.deepcopy(self.page_preview.page_ops)
-        self.doc.close()
-        self.invalidate_view()
-        self.page_preview._drop_scratch()
         created_copy: Path | None = None
-        work_path = source
+        target = source
         try:
             if redact_ops and self.redact_save_as_copy:
                 created_copy = unused_sibling(source, "_redacted")
-                shutil.copy2(source, created_copy)
-                chmod_private_file(created_copy)
-                work_path = created_copy
-            for op in page_ops:
-                engine.apply(work_path, [op], output=work_path)
-            if other_markup:
-                engine.apply(work_path, other_markup, output=work_path)
-            if redact_ops:
-                engine.apply(work_path, redact_ops, output=work_path)
-        except Exception:
-            if created_copy is not None:
-                created_copy.unlink(missing_ok=True)
-            self.doc = pymupdf.open(self.path)
-            self.invalidate_view()
-            self.page_preview.rebuild()
+                target = created_copy
+            # The engine stages the complete sequence and publishes once.  A
+            # failed operation therefore leaves both the source and any
+            # existing output untouched, while pending ghosts remain usable
+            # for a retry.
+            engine.apply(source, operations, output=target)
+        except BaseException:
+            # The engine publishes the target only after the complete
+            # operation sequence succeeds.  Leave a path that appeared here
+            # untouched: it may belong to a concurrent actor rather than to
+            # this failed save attempt.
             raise
         if created_copy is not None:
             self.adopt_document(str(created_copy))
         else:
+            if self.doc is not None and not self.doc.is_closed:
+                self.doc.close()
             self.doc = pymupdf.open(self.path)
             self.invalidate_view()
             self.page_preview.clear()

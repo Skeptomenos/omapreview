@@ -441,22 +441,59 @@ def _apply_redact(doc, op, *, dry_run: bool) -> dict:
     return result
 
 
-def _apply_extract_pages(doc, op, *, dry_run: bool) -> dict:
+def _stage_output_path(destination: Path) -> Path:
+    """Create a private sibling that can later be atomically published."""
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    fd, name = tempfile.mkstemp(
+        prefix=f".{destination.name}.", suffix=".tmp", dir=str(destination.parent)
+    )
+    os.close(fd)
+    staged = Path(name)
+    try:
+        chmod_private_file(staged)
+    except BaseException:
+        staged.unlink(missing_ok=True)
+        raise
+    return staged
+
+
+def _publish_staged(staged: Path, destination: Path) -> None:
+    """Publish one completed output without opening the destination for write."""
+    os.replace(staged, destination)
+
+
+def _stage_extract_pages(doc, op) -> tuple[dict, Path]:
     pages = op["pages"]
     _validate_page_indices(doc, pages)
-    dest = Path(op["to"])
-    if dry_run:
-        return {"pages": pages, "to": str(dest)}
+    dest = Path(op["to"]).expanduser().absolute()
+    display_dest = str(Path(op["to"]))
+    staged = _stage_output_path(dest)
     out_doc = pymupdf.open()
     try:
         for p in pages:
             out_doc.insert_pdf(doc, from_page=p - 1, to_page=p - 1)
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        out_doc.save(str(dest), garbage=3, deflate=True)
-        chmod_private_file(dest)
+        out_doc.save(str(staged), garbage=3, deflate=True)
+        chmod_private_file(staged)
+    except BaseException:
+        staged.unlink(missing_ok=True)
+        raise
     finally:
         out_doc.close()
-    return {"pages": pages, "to": str(dest)}
+    return {"pages": pages, "to": display_dest}, staged
+
+
+def _apply_extract_pages(doc, op, *, dry_run: bool) -> dict:
+    pages = op["pages"]
+    _validate_page_indices(doc, pages)
+    dest = Path(op["to"]).expanduser().absolute()
+    if dry_run:
+        return {"pages": pages, "to": str(Path(op["to"]))}
+    resolution, staged = _stage_extract_pages(doc, op)
+    try:
+        _publish_staged(staged, dest)
+    finally:
+        staged.unlink(missing_ok=True)
+    return resolution
 
 
 def _project_page_count(doc: pymupdf.Document, ops: list[dict]) -> int:
@@ -494,26 +531,117 @@ _APPLIERS = {
 }
 
 
+def _stage_save(doc: pymupdf.Document, output: Path) -> Path:
+    """Serialize a document to a private sibling without publishing it."""
+    staged = _stage_output_path(output)
+    try:
+        # PDF_ENCRYPT_KEEP preserves the input's owner/user password and
+        # permission bits, including an empty user password.  It is also a
+        # no-op for an unencrypted input.
+        doc.save(
+            str(staged),
+            garbage=3,
+            deflate=True,
+            encryption=pymupdf.PDF_ENCRYPT_KEEP,
+            permissions=doc.permissions,
+        )
+        chmod_private_file(staged)
+    except BaseException:
+        staged.unlink(missing_ok=True)
+        raise
+    return staged
+
+
 def _save(doc: pymupdf.Document, source: Path, output: Path) -> None:
     # PyMuPDF cannot do a full (garbage-collected) save over the file it has
-    # open, so route same-file saves through a sibling temp file. chmod 0600
-    # after save: Document.save(path) follows umask (typically 0644).
-    fd, tmp = tempfile.mkstemp(dir=str(output.parent), suffix=".pdf")
-    os.close(fd)
+    # open, so route every save through a sibling temp file.  The source arg
+    # remains part of this helper's internal API for callers that distinguish
+    # an in-place save from a copy.  Do not replace a different directory entry
+    # that happens to refer to the source (for example, a hard link).
+    if _same_file_or_path(source, output) and source != output:
+        raise OpError(
+            f"output {output} aliases source {source}; use the source path "
+            "for an in-place save or choose a separate output"
+        )
+    staged: Path | None = None
     try:
-        doc.save(tmp, garbage=3, deflate=True)
-        chmod_private_file(tmp)
-        doc.close()
-        os.replace(tmp, output)
-        chmod_private_file(output)
-    except BaseException:
+        staged = _stage_save(doc, output)
         if not doc.is_closed:
             doc.close()
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
+    except BaseException:
+        if staged is not None:
+            staged.unlink(missing_ok=True)
         raise
+    try:
+        _publish_staged(staged, output)
+    finally:
+        if staged is not None:
+            staged.unlink(missing_ok=True)
+
+
+def _absolute_path(value: str | Path) -> Path:
+    # Normalize only lexical components.  Keep symlinks unresolved so the
+    # same-file checks can reject a different directory entry safely.
+    return Path(os.path.abspath(os.path.expanduser(os.fspath(value))))
+
+
+def _canonical_path(value: str | Path) -> Path:
+    return _absolute_path(value).resolve(strict=False)
+
+
+def _same_file_or_path(first: Path, second: Path) -> bool:
+    if _canonical_path(first) == _canonical_path(second):
+        return True
+    try:
+        return os.path.samefile(first, second)
+    except OSError:
+        return False
+
+
+def _plan_outputs(
+    source: Path,
+    operations: list[dict],
+    output: Path,
+    *,
+    explicit_output: bool,
+    save_main: bool,
+) -> list[Path]:
+    """Validate all output relationships before opening a writable target."""
+    extraction_targets: list[Path] = []
+    for op in operations:
+        if op["op"] != "extract_pages":
+            continue
+        target = _absolute_path(op["to"])
+        if _same_file_or_path(source, target):
+            raise OpError(
+                f"extract_pages destination {target} aliases the source {source}; "
+                "choose a different output file"
+            )
+        if any(_same_file_or_path(target, previous) for previous in extraction_targets):
+            raise OpError(
+                f"extract_pages destination {target} duplicates another extraction "
+                "target; choose one destination per extraction"
+            )
+        extraction_targets.append(target)
+
+    if save_main and explicit_output:
+        # In-place output is the supported explicit alias.  A hard link or a
+        # different symlink/path to the source would replace an unexpected
+        # directory entry, so reject it before any document work starts.
+        if _same_file_or_path(source, output) and source != output:
+            raise OpError(
+                f"output {output} aliases source {source}; use the source path "
+                "for an in-place save or choose a separate output"
+            )
+
+    if save_main:
+        for target in extraction_targets:
+            if _same_file_or_path(output, target):
+                raise OpError(
+                    f"output {output} collides with extraction destination {target}; "
+                    "choose separate paths"
+                )
+    return extraction_targets
 
 
 def _order_ops(ops: list[dict]) -> list[dict]:
@@ -538,21 +666,50 @@ def apply(
     With dry_run=True nothing is written; the report still resolves geometry
     (text matches, signature rects) so callers can preview placements.
     """
-    pdf = Path(pdf)
-    if not pdf.is_file():
-        raise FileNotFoundError(f"no such PDF: {pdf}")
+    input_path = _absolute_path(pdf)
+    if not input_path.is_file():
+        raise FileNotFoundError(f"no such PDF: {input_path}")
+    pdf = input_path.resolve()
     validated = _order_ops(ops_mod.validate_all(op_list))
-    output = Path(output) if output else pdf
+    explicit_output = output is not None
+    main_output = _absolute_path(output) if explicit_output else pdf
+    output_display = (
+        str(Path(output).expanduser()) if explicit_output else str(input_path)
+    )
+    extract_only = bool(validated) and all(
+        op["op"] == "extract_pages" for op in validated
+    )
+    save_main = not (extract_only and not explicit_output)
+    extraction_targets = _plan_outputs(
+        pdf,
+        validated,
+        main_output,
+        explicit_output=explicit_output,
+        save_main=save_main,
+    )
 
     doc = pymupdf.open(str(pdf))
+    staged_extractions: list[tuple[Path, Path]] = []
+    staged_main: Path | None = None
     try:
         if doc.needs_pass:
             raise OpError(f"{pdf} is password-protected; decrypt it first")
+        if extraction_targets and doc.metadata.get("encryption"):
+            raise OpError(
+                "extract_pages cannot preserve the source PDF's encryption and "
+                "permissions; decrypt the source before extracting"
+            )
         _ensure_pages_remain(doc, validated)
         applied = []
         for op in validated:
             if op["op"] == "extract_pages":
-                resolution = _apply_extract_pages(doc, op, dry_run=dry_run)
+                if dry_run:
+                    resolution = _apply_extract_pages(doc, op, dry_run=True)
+                else:
+                    resolution, staged = _stage_extract_pages(doc, op)
+                    staged_extractions.append(
+                        (Path(op["to"]).expanduser().absolute(), staged)
+                    )
             elif op["op"] == "redact":
                 resolution = _apply_redact(doc, op, dry_run=dry_run)
             elif op["op"] == "delete_annotation":
@@ -564,12 +721,27 @@ def apply(
             doc.close()
             return {"output": None, "applied": applied}
         _verify_redact_ops_serialized(doc, applied)
-        _save(doc, pdf, output)
+        if save_main:
+            staged_main = _stage_save(doc, main_output)
+        doc.close()
+        # Publish excerpts before the main document so a later main-output
+        # failure cannot leave an in-place source half-committed.  Several
+        # independent renames cannot form one filesystem transaction; the
+        # operation stage is all-or-nothing, while publication is best-effort
+        # across those separate destination paths.
+        for destination, staged in staged_extractions:
+            _publish_staged(staged, destination)
+        if staged_main is not None:
+            _publish_staged(staged_main, main_output)
     except BaseException:
         if not doc.is_closed:
             doc.close()
+        for _destination, staged in staged_extractions:
+            staged.unlink(missing_ok=True)
+        if staged_main is not None:
+            staged_main.unlink(missing_ok=True)
         raise
-    return {"output": str(output), "applied": applied}
+    return {"output": output_display if save_main else None, "applied": applied}
 
 
 def _pages_with_redact_annots(doc: pymupdf.Document) -> list[int]:
@@ -592,10 +764,15 @@ def flatten(pdf: str | Path, output: str | Path | None = None) -> dict:
     stays extractable. Apply a reviewed ``redact`` (``apply_now``) or delete
     the annotations first. Flatten never silently ``apply_redactions()``.
     """
-    pdf = Path(pdf)
-    if not pdf.is_file():
-        raise FileNotFoundError(f"no such PDF: {pdf}")
-    output = Path(output) if output else pdf
+    input_path = _absolute_path(pdf)
+    if not input_path.is_file():
+        raise FileNotFoundError(f"no such PDF: {input_path}")
+    pdf = input_path.resolve()
+    explicit_output = output is not None
+    main_output = _absolute_path(output) if explicit_output else pdf
+    output_display = (
+        str(Path(output).expanduser()) if explicit_output else str(input_path)
+    )
     doc = pymupdf.open(str(pdf))
     try:
         pending_pages = _pages_with_redact_annots(doc)
@@ -609,9 +786,9 @@ def flatten(pdf: str | Path, output: str | Path | None = None) -> dict:
                 "text extractable."
             )
         doc.bake(annots=True, widgets=True)
-        _save(doc, pdf, output)
+        _save(doc, pdf, main_output)
     except BaseException:
         if not doc.is_closed:
             doc.close()
         raise
-    return {"output": str(output)}
+    return {"output": output_display}
