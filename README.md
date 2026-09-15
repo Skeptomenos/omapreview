@@ -50,7 +50,7 @@ removes the matched content; a black drawing is not a redact.
 
 ### Automate
 
-`omepreview read` returns text, layout, annotations, fields, and bboxes.
+`omapreview read` returns text, layout, annotations, fields, and bboxes.
 Coordinates are PDF points with a top-left origin and pages are 1-based. Use a
 bbox from `read` as a precise target for an operation.
 
@@ -117,7 +117,7 @@ For a batch of mixed edits, put the operation list in JSON:
 ```
 
 ```bash
-omepreview apply document.pdf --ops edits.json -o reviewed.pdf
+omapreview apply document.pdf --ops edits.json -o reviewed.pdf
 ```
 
 Use `--dry-run --json` when you want resolved geometry without writing an
@@ -129,7 +129,7 @@ Install the optional MCP extra, then start the server:
 
 ```bash
 .venv/bin/pip install -e '.[mcp]'
-omepreview-mcp
+.venv/bin/omapreview-mcp
 ```
 
 The server provides broad coverage for document reads, page operations,
@@ -138,6 +138,8 @@ defaults depend on the entry point: dedicated MCP redaction and signature
 calls accept explicit confirmation, while generic `apply_ops` and CLI writes
 follow their own documented defaults. Use `--dry-run` or the MCP confirmation
 argument when you want a proposal first.
+
+See the [agent playbook](skill/SKILL.md) for PDF task workflows.
 
 ## Project notes
 
