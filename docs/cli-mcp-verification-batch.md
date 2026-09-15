@@ -191,3 +191,8 @@ are discoverable, consequential entry points obey the documented policy, each
 operation has a demonstrated post-save verification route, and all required
 checks pass on the recorded commit. The orchestrator then integrates H and
 rechecks the combined result before dispatching D/E/F.
+
+After H lands, [Batch I](agent-skill-batch.md) restructures the skill into a
+small entry file with mode and scenario references. H still ships the accurate
+verification instructions required here; I owns the later progressive-disclosure
+work and tests its recipes against the implemented interfaces.
