@@ -25,6 +25,14 @@ def _make_pdf(path: Path) -> Path:
     return path
 
 
+def _make_sized_pdf(path: Path, width: float, height: float) -> Path:
+    doc = pymupdf.open()
+    doc.new_page(width=width, height=height)
+    doc.save(str(path))
+    doc.close()
+    return path
+
+
 def test_apply_now_rejects_string_booleans():
     with pytest.raises(OpError, match="apply_now must be a JSON boolean"):
         validate({"op": "redact", "page": 1, "match": "SECRET", "apply_now": "false"})
@@ -73,6 +81,88 @@ def test_snapshot_rejects_bad_scale_before_writing(tmp_path, scale):
     with pytest.raises(ValueError):
         render.snapshot(pdf, output=output, scale=scale)
     assert not output.exists()
+
+
+def test_snapshot_rejects_pixel_budget_before_allocation_and_preserves_output(
+    tmp_path, monkeypatch
+):
+    pdf = _make_sized_pdf(tmp_path / "huge.pdf", 20_000, 20_000)
+    output = tmp_path / "snapshot.png"
+    output.write_bytes(b"existing output")
+    raster_called = False
+
+    def observe_raster(*_args, **_kwargs):
+        nonlocal raster_called
+        raster_called = True
+        raise AssertionError("raster allocation must not be reached")
+
+    monkeypatch.setattr(render, "raster_page", observe_raster)
+    with pytest.raises(ValueError, match=r"80,000x80,000.*6,400,000,000"):
+        render.snapshot(pdf, output=output, scale=4)
+
+    assert not raster_called
+    assert output.read_bytes() == b"existing output"
+
+
+def test_snapshot_rejects_grid_budget_before_drawing_and_preserves_output(
+    tmp_path, monkeypatch
+):
+    pdf = _make_sized_pdf(tmp_path / "huge.pdf", 20_000, 20_000)
+    output = tmp_path / "snapshot.png"
+    output.write_bytes(b"existing output")
+    raster_called = False
+
+    def observe_raster(*_args, **_kwargs):
+        nonlocal raster_called
+        raster_called = True
+        raise AssertionError("raster allocation must not be reached")
+
+    monkeypatch.setattr(render, "raster_page", observe_raster)
+    with pytest.raises(ValueError, match=r"39,998 lines.*79,996 labels"):
+        render.snapshot(pdf, output=output, grid=1, scale=0.05)
+
+    assert not raster_called
+    assert output.read_bytes() == b"existing output"
+
+
+def test_snapshot_and_grid_budget_boundaries_are_allowed():
+    assert render._validate_snapshot_budget(10_000, 4_000, 1) == (10_000, 4_000)
+    assert render._validate_snapshot_budget(render.MAX_SNAPSHOT_DIMENSION, 1, 1) == (
+        render.MAX_SNAPSHOT_DIMENSION,
+        1,
+    )
+    assert render._validate_grid_budget(render.MAX_GRID_LINES + 1, 1, 1) == (
+        render.MAX_GRID_LINES,
+        0,
+    )
+
+
+@pytest.mark.parametrize(
+    "width, height",
+    [
+        (render.MAX_SNAPSHOT_DIMENSION + 1, 1),
+        (10_000, 4_001),
+    ],
+)
+def test_snapshot_rejects_each_raster_budget(width, height):
+    with pytest.raises(ValueError, match="snapshot would render"):
+        render._validate_snapshot_budget(width, height, 1)
+
+
+def test_grid_rejects_one_line_over_budget_before_shape_creation():
+    shape_created = False
+
+    class FakePage:
+        rect = pymupdf.Rect(0, 0, render.MAX_GRID_LINES + 2, 1)
+
+        def new_shape(self):
+            nonlocal shape_created
+            shape_created = True
+            raise AssertionError("page drawing must not be reached")
+
+    with pytest.raises(ValueError, match=f"{render.MAX_GRID_LINES + 1:,} lines"):
+        render._draw_grid(FakePage(), 1)
+    assert not shape_created
 
 
 def test_redact_conversion_preserves_fill_and_apply_now():

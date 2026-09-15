@@ -16,8 +16,11 @@ import pymupdf
 GRID_COLOR = (0.85, 0.2, 0.2)
 MIN_GRID_STEP = 1.0
 MAX_GRID_STEP = 10_000.0
+MAX_GRID_LINES = 4_000
 MIN_SNAPSHOT_SCALE = 0.05
 MAX_SNAPSHOT_SCALE = 4.0
+MAX_SNAPSHOT_DIMENSION = 16_384
+MAX_SNAPSHOT_PIXELS = 40_000_000
 
 
 def _bounded_positive(
@@ -41,6 +44,62 @@ def page_view_matrix(zoom: float) -> pymupdf.Matrix:
     """
     z = float(zoom)
     return pymupdf.Matrix(z, z)
+
+
+def _page_dimensions(width: float, height: float) -> tuple[float, float]:
+    if not all(
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and value > 0
+        for value in (width, height)
+    ):
+        raise ValueError(
+            f"page dimensions must be finite and positive, got {width}x{height}"
+        )
+    return float(width), float(height)
+
+
+def _validate_snapshot_budget(
+    width: float, height: float, scale: float
+) -> tuple[int, int]:
+    """Return conservative output dimensions or reject before pixmap allocation."""
+    width, height = _page_dimensions(width, height)
+    pixel_width = math.ceil(width * scale)
+    pixel_height = math.ceil(height * scale)
+    pixels = pixel_width * pixel_height
+    if (
+        pixel_width > MAX_SNAPSHOT_DIMENSION
+        or pixel_height > MAX_SNAPSHOT_DIMENSION
+        or pixels > MAX_SNAPSHOT_PIXELS
+    ):
+        raise ValueError(
+            f"snapshot would render {pixel_width:,}x{pixel_height:,} pixels "
+            f"({pixels:,} total); limits are {MAX_SNAPSHOT_DIMENSION:,} pixels "
+            f"per side and {MAX_SNAPSHOT_PIXELS:,} total. Reduce --scale or "
+            "crop the PDF"
+        )
+    return pixel_width, pixel_height
+
+
+def _grid_line_count(length: float, step: float) -> int:
+    return max(0, math.ceil(length / step) - 1)
+
+
+def _validate_grid_budget(
+    width: float, height: float, step: float
+) -> tuple[int, int]:
+    """Return vertical/horizontal line counts or reject before page drawing."""
+    width, height = _page_dimensions(width, height)
+    vertical = _grid_line_count(width, step)
+    horizontal = _grid_line_count(height, step)
+    total = vertical + horizontal
+    if total > MAX_GRID_LINES:
+        raise ValueError(
+            f"grid would draw {total:,} lines and {total * 2:,} labels; "
+            f"limit is {MAX_GRID_LINES:,} lines. Increase --grid or crop the PDF"
+        )
+    return vertical, horizontal
 
 
 def raster_page(page: pymupdf.Page, zoom: float = 1.0, *, alpha: bool = False):
@@ -73,6 +132,7 @@ def snapshot(
             raise ValueError(f"page {page} out of range (document has {doc.page_count})")
         pg = doc[page - 1]
         size = [pg.rect.width, pg.rect.height]
+        _validate_snapshot_budget(size[0], size[1], scale)
 
         if grid is not None:
             _draw_grid(pg, grid)
@@ -90,27 +150,24 @@ def snapshot(
 def _draw_grid(pg: pymupdf.Page, step: float) -> None:
     step = _bounded_positive(step, "grid", MIN_GRID_STEP, MAX_GRID_STEP)
     width, height = pg.rect.width, pg.rect.height
+    vertical, horizontal = _validate_grid_budget(width, height, step)
     shape = pg.new_shape()
 
-    x = step
-    while x < width:
+    for index in range(1, vertical + 1):
+        x = index * step
         shape.draw_line((x, 0), (x, height))
-        x += step
-    y = step
-    while y < height:
+    for index in range(1, horizontal + 1):
+        y = index * step
         shape.draw_line((0, y), (width, y))
-        y += step
     shape.finish(color=GRID_COLOR, width=0.4, stroke_opacity=0.55)
     shape.commit()
 
     # Labels on both edges so a crop of the image still carries coordinates.
-    x = step
-    while x < width:
+    for index in range(1, vertical + 1):
+        x = index * step
         for ly in (10, height - 4):
             pg.insert_text((x + 1, ly), str(int(x)), fontsize=6, color=GRID_COLOR)
-        x += step
-    y = step
-    while y < height:
+    for index in range(1, horizontal + 1):
+        y = index * step
         for lx in (2, width - 22):
             pg.insert_text((lx, y - 1), str(int(y)), fontsize=6, color=GRID_COLOR)
-        y += step

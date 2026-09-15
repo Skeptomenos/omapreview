@@ -50,9 +50,12 @@ Signature widths must be greater than 0 and at most 10,000 points. Blank-page
 dimensions must be greater than 0 and at most 100,000 points.
 
 `omepreview snapshot` accepts scale values from 0.05 through 4 and grid steps
-from 1 through 10,000 points. These bounds cap raster and grid work. Invalid,
-nonfinite, nonpositive, or out-of-range values reject the request before a
-file is written.
+from 1 through 10,000 points. A rendered image is also limited to 16,384 pixels
+per side and 40,000,000 total pixels. A grid is limited to 4,000 lines and
+8,000 labels. Requests that exceed these work budgets must reduce the scale,
+increase the grid step, or crop the PDF. Invalid, nonfinite, nonpositive, or
+out-of-range requests reject before page drawing, raster allocation, or output
+replacement.
 
 ## Operations
 
