@@ -12,3 +12,4 @@ curl -fsSL https://github.com/Skeptomenos/omapreview/releases/download/v0.1.0/in
 
 - Launcher: Super+Space → empty editor; Open / Ctrl+O picks a PDF. Desktop `Exec=omapreview edit %f`.
 - Entry docs: `README.md`, `docs/ops.md`, `docs/omapdf-preview-parity-spec.md`, `docs/omapdf-preview-gap-analysis.md`.
+- Before scoping review fixes: [review recheck, 2026-09-15](docs/evidence/review-recheck-2026-09-15.md) records which R01–R26 findings reproduce at `784d158` and the recommended work boundaries.
