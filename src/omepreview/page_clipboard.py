@@ -138,187 +138,154 @@ def _parse_clipboard_data(mime: str, data: bytes) -> bytes | None:
     return None
 
 
+def _read_gtk_bytes_async(mimes, on_result, *, timeout_ms):
+    """Read a bounded MIME stream through EOF; report (MIME, raw bytes)."""
+    try:
+        import gi
+
+        gi.require_version("Gdk", "4.0")
+        from gi.repository import Gdk, Gio, GLib
+    except (ImportError, ValueError):
+        on_result(None, None)
+        return None
+    display = Gdk.Display.get_default()
+    clip = display.get_clipboard() if display is not None else None
+    if clip is None:
+        on_result(None, None)
+        return None
+
+    cancellable = Gio.Cancellable()
+    state = {"done": False, "timeout_id": 0, "stream": None, "pending": False}
+    data = bytearray()
+
+    def close_stream():
+        stream = state["stream"]
+        if stream is None or state["pending"]:
+            return
+        state["stream"] = None
+
+        def closed(source, result):
+            try:
+                source.close_finish(result)
+            except GLib.Error:
+                pass
+
+        # Cleanup must not inherit the cancelled read token.
+        stream.close_async(GLib.PRIORITY_DEFAULT, None, closed)
+
+    def finish(mime=None, value=None):
+        if state["done"]:
+            return
+        state["done"] = True
+        if state["timeout_id"]:
+            GLib.source_remove(state["timeout_id"])
+            state["timeout_id"] = 0
+        data.clear()
+        close_stream()
+        on_result(mime, value)
+
+    def read_next(stream, mime):
+        if state["done"]:
+            close_stream()
+            return
+        state["pending"] = True
+        try:
+            stream.read_bytes_async(
+                min(65536, CLIPBOARD_MAX_BYTES - len(data) + 1),
+                GLib.PRIORITY_DEFAULT,
+                cancellable,
+                lambda source, result: on_bytes(source, result, mime),
+            )
+        except (GLib.Error, TypeError, ValueError):
+            state["pending"] = False
+            finish()
+
+    def on_bytes(stream, result, mime):
+        state["pending"] = False
+        try:
+            chunk = stream.read_bytes_finish(result).get_data()
+            if state["done"]:
+                return
+            if not chunk:
+                finish(mime, bytes(data))
+            elif len(data) + len(chunk) > CLIPBOARD_MAX_BYTES:
+                finish()
+            else:
+                data.extend(chunk)
+                read_next(stream, mime)
+        except (GLib.Error, TypeError, ValueError):
+            finish()
+        finally:
+            if state["done"]:
+                close_stream()
+
+    def on_read(_clipboard, result):
+        try:
+            stream, mime = clip.read_finish(result)
+            state["stream"] = stream
+            if state["done"]:
+                close_stream()
+            elif stream is None or mime not in mimes:
+                finish()
+            else:
+                read_next(stream, mime)
+        except (GLib.Error, TypeError, ValueError):
+            finish()
+
+    def on_timeout():
+        state["timeout_id"] = 0
+        cancellable.cancel()
+        return False
+
+    # Gio.Cancellable.connect calls its callback without arguments.
+    cancellable.connect(lambda: finish())
+    state["timeout_id"] = GLib.timeout_add(max(1, int(timeout_ms)), on_timeout)
+    try:
+        clip.read_async(mimes, GLib.PRIORITY_DEFAULT, cancellable, on_read)
+    except (GLib.Error, TypeError, ValueError):
+        finish()
+    return cancellable
+
+
 def read_clipboard_pdf_bytes_async(
     on_result: Callable[[bytes | None], None],
     *,
     timeout_ms: int = CLIPBOARD_READ_TIMEOUT_MS,
 ):
-    """Read page bytes without blocking GTK's main loop.
+    """Read a complete PDF asynchronously, with timeout and cancellation."""
+    def decoded(mime, data):
+        on_result(_parse_clipboard_data(mime, data) if data is not None else None)
 
-    GTK's MIME-aware ``read_async`` returns the selected MIME type and an
-    input stream. The operation is cancelled after the bounded timeout and
-    ``on_result`` runs exactly once, including on errors or unavailable GTK.
-    The returned ``Gio.Cancellable`` can be cancelled by the caller.
-    """
-    try:
-        import gi
-
-        gi.require_version("Gdk", "4.0")
-        from gi.repository import Gdk, Gio, GLib
-    except (ImportError, ValueError):
-        on_result(None)
-        return None
-    display = Gdk.Display.get_default()
-    if display is None:
-        on_result(None)
-        return None
-    clip = display.get_clipboard()
-    if clip is None:
-        on_result(None)
-        return None
-
-    cancellable = Gio.Cancellable()
-    state = {"done": False, "timeout_id": 0}
-
-    def finish(value: bytes | None):
-        if state["done"]:
-            return
-        state["done"] = True
-        timeout_id = state["timeout_id"]
-        if timeout_id:
-            try:
-                GLib.source_remove(timeout_id)
-            except (TypeError, ValueError):
-                pass
-        try:
-            on_result(value)
-        except Exception:
-            # The GTK callback must not unwind through the main loop.
-            pass
-
-    def on_bytes(stream, res, mime):
-        try:
-            raw = stream.read_bytes_finish(res)
-            if isinstance(raw, GLib.Bytes):
-                data = raw.get_data()
-            elif isinstance(raw, (bytes, bytearray)):
-                data = bytes(raw)
-            else:
-                data = None
-            if data is None or len(data) > CLIPBOARD_MAX_BYTES:
-                finish(None)
-            else:
-                finish(_parse_clipboard_data(mime, data))
-        except (GLib.Error, TypeError, ValueError):
-            finish(None)
-
-    def on_read(_clipboard, res):
-        try:
-            stream, mime = clip.read_finish(res)
-            if stream is None or not mime:
-                finish(None)
-                return
-            stream.read_bytes_async(
-                CLIPBOARD_MAX_BYTES + 1,
-                GLib.PRIORITY_DEFAULT,
-                cancellable,
-                lambda _stream, result: on_bytes(stream, result, mime),
-            )
-        except (GLib.Error, TypeError, ValueError):
-            finish(None)
-
-    def on_timeout():
-        if not state["done"]:
-            cancellable.cancel()
-            finish(None)
-        return False
-
-    cancellable.connect(lambda _cancellable: finish(None))
-    state["timeout_id"] = GLib.timeout_add(
-        max(1, int(timeout_ms)), on_timeout
+    return _read_gtk_bytes_async(
+        [*PAGE_CLIPBOARD_MIMES, MIME_PDF], decoded, timeout_ms=timeout_ms
     )
-    try:
-        clip.read_async(
-            [*PAGE_CLIPBOARD_MIMES, MIME_PDF],
-            GLib.PRIORITY_DEFAULT,
-            cancellable,
-            on_read,
-        )
-    except (GLib.Error, TypeError, ValueError):
-        finish(None)
-    return cancellable
 
 
 def _read_gtk_clipboard_mime(mime: str) -> bytes | None:
-    """Compatibility reader for one MIME, with a bounded non-blocking pump."""
-    result: dict[str, object] = {"ready": False, "value": None}
-
-    def done(value: bytes | None):
-        result["value"] = value
-        result["ready"] = True
-
-    # Use the same MIME-aware async transport as the GTK editor. The short
-    # compatibility wait is only for legacy synchronous callers and never
-    # blocks inside ``MainContext.iteration``.
+    """Return raw MIME bytes; the synchronous caller decodes them once."""
     try:
-        import gi
-
-        gi.require_version("Gdk", "4.0")
-        from gi.repository import Gdk, Gio, GLib
-    except (ImportError, ValueError):
+        from gi.repository import GLib
+    except ImportError:
         return None
-    display = Gdk.Display.get_default()
-    if display is None:
-        return None
-    clip = display.get_clipboard()
-    if clip is None:
-        return None
-    cancellable = Gio.Cancellable()
-    state = {"done": False, "timeout_id": 0}
 
-    def finish(value: bytes | None):
-        if state["done"]:
-            return
-        state["done"] = True
-        if state["timeout_id"]:
-            try:
-                GLib.source_remove(state["timeout_id"])
-            except (TypeError, ValueError):
-                pass
-        done(value)
+    result = {"ready": False, "value": None}
 
-    def on_bytes(stream, res):
-        try:
-            raw = stream.read_bytes_finish(res)
-            data = raw.get_data() if isinstance(raw, GLib.Bytes) else bytes(raw)
-            finish(_parse_clipboard_data(mime, data))
-        except (GLib.Error, TypeError, ValueError):
-            finish(None)
+    def done(_mime, data):
+        result.update(ready=True, value=data)
 
-    def on_read(_clipboard, res):
-        try:
-            stream, returned_mime = clip.read_finish(res)
-            if stream is None or returned_mime != mime:
-                finish(None)
-                return
-            stream.read_bytes_async(
-                CLIPBOARD_MAX_BYTES + 1,
-                GLib.PRIORITY_DEFAULT,
-                cancellable,
-                on_bytes,
-            )
-        except (GLib.Error, TypeError, ValueError):
-            finish(None)
-
-    def on_timeout():
-        cancellable.cancel()
-        finish(None)
-        return False
-
-    state["timeout_id"] = GLib.timeout_add(CLIPBOARD_READ_TIMEOUT_MS, on_timeout)
-    try:
-        clip.read_async([mime], GLib.PRIORITY_DEFAULT, cancellable, on_read)
-    except (GLib.Error, TypeError, ValueError):
-        finish(None)
+    cancellable = _read_gtk_bytes_async(
+        [mime], done, timeout_ms=CLIPBOARD_READ_TIMEOUT_MS
+    )
     ctx = GLib.MainContext.default()
     deadline = time.monotonic() + CLIPBOARD_READ_TIMEOUT_MS / 1000
     while not result["ready"] and time.monotonic() < deadline:
-        while ctx.pending():
-            ctx.iteration(False)
-        time.sleep(0.005)
-    if not result["ready"]:
+        ctx.iteration(False)
+        time.sleep(0.001)
+    if not result["ready"] and cancellable is not None:
         cancellable.cancel()
     return result["value"]
+
+
 
 
 def read_clipboard_pdf_bytes() -> bytes | None:
