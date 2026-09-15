@@ -19,9 +19,10 @@ Each op is available through `omepreview apply --ops file.json` and MCP
 | Delete annot | `omepreview delete-annotation FILE --page N --index I` | `delete_annotation` (dry-run default) |
 | Markup / forms | `annotate`, `note`, `fill`, `sign`, `shape` | `highlight`, `add_note`, `fill_field`, `place_signature`, `add_shape` |
 
-Destructive MCP tools (`place_signature`, `delete_pages`, `redact`,
+Consequential MCP tools (`place_signature`, `delete_pages`, `redact`,
 `delete_annotation`) default to dry-run; pass `confirm=true` (or
-`confirmed=true` for signatures) after human approval.
+`confirmed=true` for signatures) after human approval. The generic
+`apply_ops` tool also defaults to dry-run; pass `dry_run=false` after approval.
 
 ## Conventions
 
@@ -38,6 +39,20 @@ Destructive MCP tools (`place_signature`, `delete_pages`, `redact`,
   serialization succeed. In-place saves use an atomic replacement and keep
   the source file private (`0600`). Existing PDF encryption and permissions
   are retained; password-protected files that cannot be opened are rejected.
+
+### Numeric limits
+
+Numeric inputs must be JSON numbers, not numeric strings, and must be finite.
+Coordinates are limited to -1,000,000 through 1,000,000 points. Colors are
+limited to 0 through 1. Text size must be greater than 0.1 and at most 1,000
+points. Ink and shape widths must be greater than 0 and at most 1,000 points.
+Signature widths must be greater than 0 and at most 10,000 points. Blank-page
+dimensions must be greater than 0 and at most 100,000 points.
+
+`omepreview snapshot` accepts scale values from 0.05 through 4 and grid steps
+from 1 through 10,000 points. These bounds cap raster and grid work. Invalid,
+nonfinite, nonpositive, or out-of-range values reject the request before a
+file is written.
 
 ## Operations
 

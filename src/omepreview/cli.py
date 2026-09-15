@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import shlex
 import shutil
@@ -18,29 +19,111 @@ import tempfile
 from pathlib import Path
 
 from . import __version__, engine, pages as pages_mod, read, signature
-from .ops import OpError
+from .ops import (
+    MAX_COORDINATE,
+    MAX_DIMENSION,
+    MAX_SIGNATURE_WIDTH,
+    MAX_STROKE_WIDTH,
+    OpError,
+)
+from .render import MAX_GRID_STEP, MAX_SNAPSHOT_SCALE, MIN_GRID_STEP, MIN_SNAPSHOT_SCALE
+
+
+def _cli_float(
+    value: str,
+    label: str,
+    *,
+    minimum: float | None = None,
+    maximum: float | None = None,
+    strict_minimum: bool = False,
+) -> float:
+    try:
+        number = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"{label} must be a finite number — got {value!r}") from exc
+    if not math.isfinite(number):
+        raise argparse.ArgumentTypeError(f"{label} must be finite — got {value!r}")
+    if minimum is not None and (
+        number <= minimum if strict_minimum else number < minimum
+    ):
+        relation = "greater than" if strict_minimum else "at least"
+        raise argparse.ArgumentTypeError(
+            f"{label} must be {relation} {minimum} — got {value!r}"
+        )
+    if maximum is not None and number > maximum:
+        raise argparse.ArgumentTypeError(
+            f"{label} must be at most {maximum} — got {value!r}"
+        )
+    return number
 
 
 def _point(value: str) -> list[float]:
     try:
         x, y = value.split(",")
-        return [float(x), float(y)]
     except ValueError:
         raise argparse.ArgumentTypeError(f"expected X,Y — got {value!r}")
+    return [
+        _cli_float(x, "X", minimum=-MAX_COORDINATE, maximum=MAX_COORDINATE),
+        _cli_float(y, "Y", minimum=-MAX_COORDINATE, maximum=MAX_COORDINATE),
+    ]
 
 
 def _rect(value: str) -> list[float]:
     parts = value.split(",")
     if len(parts) != 4:
         raise argparse.ArgumentTypeError(f"expected X0,Y0,X1,Y1 — got {value!r}")
-    return [float(p) for p in parts]
+    return [
+        _cli_float(
+            part,
+            f"rectangle coordinate {i}",
+            minimum=-MAX_COORDINATE,
+            maximum=MAX_COORDINATE,
+        )
+        for i, part in enumerate(parts)
+    ]
 
 
 def _rgb(value: str) -> list[float]:
     parts = value.split(",")
     if len(parts) != 3:
         raise argparse.ArgumentTypeError(f"expected R,G,B in 0..1 — got {value!r}")
-    return [float(p) for p in parts]
+    return [
+        _cli_float(part, f"RGB component {i}", minimum=0, maximum=1)
+        for i, part in enumerate(parts)
+    ]
+
+
+def _signature_width(value: str) -> float:
+    return _cli_float(
+        value, "signature width", minimum=0, maximum=MAX_SIGNATURE_WIDTH, strict_minimum=True
+    )
+
+
+def _stroke_width(value: str) -> float:
+    return _cli_float(
+        value, "stroke width", minimum=0, maximum=MAX_STROKE_WIDTH, strict_minimum=True
+    )
+
+
+def _dimension(value: str) -> float:
+    return _cli_float(
+        value, "page dimension", minimum=0, maximum=MAX_DIMENSION, strict_minimum=True
+    )
+
+
+def _grid_step(value: str) -> float:
+    return _cli_float(
+        value, "grid step", minimum=MIN_GRID_STEP, maximum=MAX_GRID_STEP
+    )
+
+
+def _snapshot_scale(value: str) -> float:
+    return _cli_float(
+        value,
+        "snapshot scale",
+        minimum=MIN_SNAPSHOT_SCALE,
+        maximum=MAX_SNAPSHOT_SCALE,
+    )
 
 
 def _emit(data, as_json: bool):
@@ -140,7 +223,7 @@ def cmd_redact(args):
         op["match"] = args.match
     else:
         op["rect"] = args.rect
-    if args.fill:
+    if args.fill is not None:
         op["fill"] = args.fill
     _run_edit(args, [op])
 
@@ -167,7 +250,7 @@ def cmd_shape(args):
         op["rect"] = args.rect
     if args.color:
         op["color"] = args.color
-    if args.width:
+    if args.width is not None:
         op["width"] = args.width
     _run_edit(args, [op])
 
@@ -365,7 +448,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("pdf")
     p.add_argument("--page", type=int, required=True)
     p.add_argument("--at", type=_point, required=True, help="top-left X,Y in points")
-    p.add_argument("--width", type=float, default=180)
+    p.add_argument("--width", type=_signature_width, default=180)
     p.add_argument("--sig", default="default", help="saved signature name")
     p.add_argument("--date", action="store_true", help="stamp today's date below")
     _out_args(p)
@@ -431,7 +514,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--rect", type=_rect, help="X0,Y0,X1,Y1 for rect or oval")
     p.add_argument("--color", type=_rgb, help="stroke RGB as R,G,B in 0..1 (default black)")
-    p.add_argument("--width", type=float, help="stroke width in points (default 2)")
+    p.add_argument("--width", type=_stroke_width, help="stroke width in points (default 2)")
     _out_args(p)
     p.set_defaults(func=cmd_shape)
 
@@ -495,8 +578,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--src-pages", metavar="PAGES", help="source pages for --insert")
     p.add_argument("--blank", action="store_true", help="insert blank page(s)")
     p.add_argument("--blank-count", type=int, default=1, help="blank pages to insert")
-    p.add_argument("--blank-width", type=float, default=595)
-    p.add_argument("--blank-height", type=float, default=842)
+    p.add_argument("--blank-width", type=_dimension, default=595)
+    p.add_argument("--blank-height", type=_dimension, default=842)
     p.add_argument("--image", metavar="PATH", help="insert an image as a new page")
     p.add_argument("--extract", metavar="PAGES", help="extract pages to -o path")
     _out_args(p)
@@ -505,8 +588,17 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("snapshot", help="render a page to PNG (with optional coordinate grid)")
     p.add_argument("pdf")
     p.add_argument("--page", type=int, default=1)
-    p.add_argument("--grid", type=float, help="overlay labeled grid lines every N points")
-    p.add_argument("--scale", type=float, default=2.0, help="raster scale (2 = 144 dpi)")
+    p.add_argument(
+        "--grid",
+        type=_grid_step,
+        help=f"overlay labeled grid lines every N points ({MIN_GRID_STEP:g}..{MAX_GRID_STEP:g})",
+    )
+    p.add_argument(
+        "--scale",
+        type=_snapshot_scale,
+        default=2.0,
+        help=f"raster scale ({MIN_SNAPSHOT_SCALE:g}..{MAX_SNAPSHOT_SCALE:g}; 2 = 144 dpi)",
+    )
     p.add_argument("-o", "--output")
     p.set_defaults(func=cmd_snapshot)
 

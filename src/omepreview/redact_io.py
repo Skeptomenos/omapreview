@@ -65,22 +65,37 @@ def redact_item_to_op(item: dict) -> dict:
         "op": "redact",
         "page": int(item["page"]) + 1,
         "rect": [x0, y0, x1, y1],
-        "fill": [0, 0, 0],
+        "fill": list(item.get("fill", [0, 0, 0])),
+        **(
+            {"apply_now": item["apply_now"]}
+            if "apply_now" in item
+            else {}
+        ),
     }
 
 
-def match_redact_ghosts(page_index: int, _match: str, rects) -> list[dict]:
+def match_redact_ghosts(
+    page_index: int,
+    _match: str,
+    rects,
+    *,
+    fill: list[float] | None = None,
+    apply_now: bool | None = None,
+) -> list[dict]:
     """One ghost per resolved rectangle so an all-occurrences proposal is reviewable."""
     items = []
     for r in rects:
-        items.append(
-            {
-                "kind": "redact",
-                "page": page_index,
-                "x0": float(r.x0),
-                "y0": float(r.y0),
-                "x1": float(r.x1),
-                "y1": float(r.y1),
-            }
-        )
+        item = {
+            "kind": "redact",
+            "page": page_index,
+            "x0": float(r.x0),
+            "y0": float(r.y0),
+            "x1": float(r.x1),
+            "y1": float(r.y1),
+        }
+        if fill is not None:
+            item["fill"] = list(fill)
+        if apply_now is not None:
+            item["apply_now"] = apply_now
+        items.append(item)
     return items

@@ -44,7 +44,7 @@ from .crop_coords import transform_pending_for_crop
 from .export_guard import unsaved_export_reason
 from .fs_privacy import atomic_write_private
 from . import signature as sig_store
-from .ops import OpError
+from .ops import OpError, validate_all
 from .page_preview import (
     PagePreviewState,
     rebind_items_to_identities,
@@ -102,6 +102,19 @@ PAGE_MARGIN_PX = 48
 SHADOWS_LIGHT = ((16, 22, 0.12), (3, 5, 0.08), (1, 1.2, 0.14))
 SHADOWS_DARK = ((18, 26, 0.55), (4, 7, 0.35), (1, 1.5, 0.5))
 PAPER_EDGE_ALPHA = 0.08
+SUPPORTED_PROPOSAL_OPS = frozenset(
+    {
+        "highlight",
+        "note",
+        "text_box",
+        "fill_field",
+        "place_signature",
+        "ink",
+        "redact",
+        "delete_annotation",
+        "shape",
+    }
+)
 
 
 def _norm_rect(it: dict) -> tuple[float, float, float, float]:
@@ -889,39 +902,71 @@ class Editor:
 
     def _load_proposals(self, ops_file: str):
         payload = json.loads(Path(ops_file).read_text())
-        for op in payload:
+        validated = validate_all(payload)
+        unsupported = [
+            (index + 1, op["op"])
+            for index, op in enumerate(validated)
+            if op["op"] not in SUPPORTED_PROPOSAL_OPS
+        ]
+        if unsupported:
+            details = ", ".join(f"#{index} {kind}" for index, kind in unsupported)
+            raise OpError(
+                f"proposal rejected: {details} cannot be represented as editable "
+                "ghosts; no proposed operations were loaded"
+            )
+        if self.doc is None or self.doc.is_closed:
+            raise OpError("proposal rejected: no PDF is open")
+
+        def proposal_page(op: dict, index: int) -> int:
+            page = op["page"] - 1
+            if page < 0 or page >= self.doc.page_count:
+                raise OpError(
+                    f"proposal rejected: operation #{index} targets page "
+                    f"{op['page']}, but the document has {self.doc.page_count} pages"
+                )
+            return page
+
+        proposed: list[dict] = []
+        for index, op in enumerate(validated, 1):
             kind = op.get("op")
-            page = op.get("page", 1) - 1
+            page = proposal_page(op, index) if "page" in op else None
             if kind == "place_signature":
-                w = float(op.get("width", 180))
+                w = op["width"]
                 name = op.get("signature", "default")
-                self.pending.append({
+                proposed.append({
                     "kind": "sig", "page": page, "x": op["at"][0], "y": op["at"][1],
-                    "w": w, "h": w * self.sig_aspect(name), "date": bool(op.get("date")),
+                    "w": w, "h": w * self.sig_aspect(name), "date": op["date"],
                     "signature": name,
                 })
             elif kind == "text_box":
                 r = op["rect"]
-                self.pending.append({
+                proposed.append({
                     "kind": "text", "page": page, "x": r[0], "y": r[1],
-                    "text": op["text"], "size": float(op.get("size", 11)),
+                    "rect": list(r), "text": op["text"], "size": op["size"],
                 })
-            elif kind == "highlight" and "rect" in op:
-                r = op["rect"]
-                self.pending.append({
-                    "kind": "highlight", "page": page,
-                    "x0": r[0], "y0": r[1], "x1": r[2], "y1": r[3],
-                })
+            elif kind == "highlight":
+                rects = [pymupdf.Rect(op["rect"])] if "rect" in op else self.doc[page].search_for(op["match"])
+                if not rects:
+                    raise OpError(
+                        f"proposal rejected: highlight text {op['match']!r} was "
+                        f"not found on page {op['page']}"
+                    )
+                for r in rects:
+                    proposed.append({
+                        "kind": "highlight", "page": page,
+                        "x0": float(r.x0), "y0": float(r.y0),
+                        "x1": float(r.x1), "y1": float(r.y1),
+                        "style": op["style"],
+                    })
             elif kind == "note":
-                self.pending.append({
+                proposed.append({
                     "kind": "note", "page": page,
                     "x": op["at"][0], "y": op["at"][1], "text": op["text"],
                 })
             elif kind == "ink":
-                self.pending.append({
+                proposed.append({
                     "kind": "ink", "page": page, "strokes": op["strokes"],
-                    "color": op.get("color", [0.75, 0.1, 0.1]),
-                    "width": op.get("width", PEN_WIDTH),
+                    "color": op["color"], "width": op["width"],
                 })
             elif kind == "shape":
                 shape = op["shape"]
@@ -930,33 +975,75 @@ class Editor:
                         "kind": "shape", "page": page, "shape": shape,
                         "x0": op["from"][0], "y0": op["from"][1],
                         "x1": op["to"][0], "y1": op["to"][1],
-                        "color": op.get("color", [0.1, 0.1, 0.1]),
-                        "width": op.get("width", PEN_WIDTH),
+                        "color": op["color"], "width": op["width"],
                     }
                 else:
                     r = op["rect"]
                     item = {
                         "kind": "shape", "page": page, "shape": shape,
                         "x0": r[0], "y0": r[1], "x1": r[2], "y1": r[3],
-                        "color": op.get("color", [0.1, 0.1, 0.1]),
-                        "width": op.get("width", PEN_WIDTH),
+                        "color": op["color"], "width": op["width"],
                     }
-                self.pending.append(item)
+                proposed.append(item)
             elif kind == "redact":
                 if "rect" in op:
                     r = op["rect"]
-                    self.pending.append({
+                    proposed.append({
                         "kind": "redact", "page": page,
                         "x0": r[0], "y0": r[1], "x1": r[2], "y1": r[3],
+                        "fill": list(op["fill"]),
+                        "apply_now": op.get("apply_now", True),
                     })
                 else:
                     rects = self.doc[page].search_for(op["match"])
-                    self.pending.extend(
-                        match_redact_ghosts(page, op["match"], rects)
+                    if not rects:
+                        raise OpError(
+                            f"proposal rejected: redact text {op['match']!r} was "
+                            f"not found on page {op['page']}"
+                        )
+                    proposed.extend(
+                        match_redact_ghosts(
+                            page,
+                            op["match"],
+                            rects,
+                            fill=op["fill"],
+                            apply_now=op.get("apply_now", True),
+                        )
                     )
-        if self.pending:
-            self.selected = self.pending[0]
-            self.page_no = self.pending[0]["page"]
+            elif kind == "fill_field":
+                matches = [
+                    (page_no, widget)
+                    for page_no in range(self.doc.page_count)
+                    for widget in (self.doc[page_no].widgets() or [])
+                    if widget.field_name == op["field"]
+                ]
+                if not matches:
+                    raise OpError(
+                        f"proposal rejected: no form field named {op['field']!r} "
+                        "was found in the document"
+                    )
+                field_page, widget = matches[0]
+                proposed.append({
+                    "kind": "field_fill", "page": field_page,
+                    "field": op["field"], "value": op["value"],
+                    "rect": list(widget.rect),
+                })
+            elif kind == "delete_annotation":
+                annots = list(self.doc[page].annots() or [])
+                if op["index"] >= len(annots):
+                    raise OpError(
+                        f"proposal rejected: annotation index {op['index']} is "
+                        f"out of range on page {op['page']}"
+                    )
+                annot = annots[op["index"]]
+                proposed.append({
+                    "kind": "delete_annot", "page": page, "index": op["index"],
+                    "rect": list(annot.rect), "annot_type": annot.type[1],
+                })
+        self.pending.extend(proposed)
+        if proposed:
+            self.selected = proposed[0]
+            self.page_no = proposed[0]["page"]
 
     def to_ops(self) -> list[dict]:
         ops = []
@@ -968,9 +1055,12 @@ class Editor:
                             "signature": it.get("signature", "default"),
                             "date": it.get("date", False)})
             elif it["kind"] == "text":
-                w = max(40.0, len(it["text"]) * it["size"] * 0.6)
+                rect = it.get("rect")
+                if rect is None:
+                    w = max(40.0, len(it["text"]) * it["size"] * 0.6)
+                    rect = [it["x"], it["y"], it["x"] + w, it["y"] + it["size"] * 1.6]
                 ops.append({"op": "text_box", "page": page, "text": it["text"],
-                            "rect": [it["x"], it["y"], it["x"] + w, it["y"] + it["size"] * 1.6],
+                            "rect": list(rect),
                             "size": it["size"]})
             elif it["kind"] == "note":
                 ops.append({"op": "note", "page": page,
@@ -978,7 +1068,8 @@ class Editor:
             elif it["kind"] == "highlight":
                 ops.append({"op": "highlight", "page": page,
                             "rect": [min(it["x0"], it["x1"]), min(it["y0"], it["y1"]),
-                                     max(it["x0"], it["x1"]), max(it["y0"], it["y1"])]})
+                                     max(it["x0"], it["x1"]), max(it["y0"], it["y1"])],
+                            "style": it.get("style", "highlight")})
             elif it["kind"] == "ink":
                 ops.append({"op": "ink", "page": page, "strokes": it["strokes"],
                             "color": it["color"], "width": it["width"]})
@@ -1009,6 +1100,8 @@ class Editor:
         if it["kind"] == "sig":
             return it["x"], it["y"], it["x"] + it["w"], it["y"] + it["h"]
         if it["kind"] == "text":
+            if "rect" in it:
+                return tuple(it["rect"])
             w = max(40.0, len(it["text"]) * it["size"] * 0.6)
             return it["x"], it["y"], it["x"] + w, it["y"] + it["size"] * 1.6
         if it["kind"] == "note":
@@ -1120,6 +1213,13 @@ class Editor:
         if it["kind"] in ("sig", "text", "note"):
             it["x"] += dx
             it["y"] += dy
+            if it["kind"] == "text" and "rect" in it:
+                it["rect"] = [
+                    it["rect"][0] + dx,
+                    it["rect"][1] + dy,
+                    it["rect"][2] + dx,
+                    it["rect"][3] + dy,
+                ]
         elif it["kind"] in ("highlight", "redact", "shape"):
             for k in ("x0", "x1"):
                 it[k] += dx

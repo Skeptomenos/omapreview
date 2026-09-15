@@ -21,6 +21,8 @@ points (1/72 inch) with the origin at the TOP-LEFT of the page, matching what
 
 from __future__ import annotations
 
+import math
+
 MARKUP_STYLES = ("highlight", "underline", "strikeout", "squiggly")
 SHAPE_TYPES = ("line", "arrow", "rect", "oval")
 
@@ -44,6 +46,15 @@ OP_TYPES = (
 
 _ROTATE_DEGREES = (90, 180, 270, -90)
 
+# Keep malformed or adversarial JSON from reaching PyMuPDF with values that
+# can fail late, allocate unbounded resources, or create non-terminating
+# geometry loops. These limits are intentionally generous for normal PDFs.
+MAX_COORDINATE = 1_000_000.0
+MAX_DIMENSION = 100_000.0
+MAX_FONT_SIZE = 1_000.0
+MAX_STROKE_WIDTH = 1_000.0
+MAX_SIGNATURE_WIDTH = 10_000.0
+
 
 class OpError(ValueError):
     """An operation failed validation or could not be applied."""
@@ -55,16 +66,51 @@ def _require(op: dict, key: str):
     return op[key]
 
 
+def _number(
+    value,
+    label: str,
+    *,
+    minimum: float | None = None,
+    maximum: float | None = None,
+    strict_minimum: bool = False,
+) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise OpError(f"{label} must be a finite number, got {value!r}")
+    number = float(value)
+    if not math.isfinite(number):
+        raise OpError(f"{label} must be finite, got {value!r}")
+    if minimum is not None and (
+        number <= minimum if strict_minimum else number < minimum
+    ):
+        relation = "greater than" if strict_minimum else "at least"
+        raise OpError(f"{label} must be {relation} {minimum}, got {value!r}")
+    if maximum is not None and number > maximum:
+        raise OpError(f"{label} must be at most {maximum}, got {value!r}")
+    return number
+
+
+def _boolean(value, label: str) -> bool:
+    if not isinstance(value, bool):
+        raise OpError(f"{label} must be a JSON boolean, got {value!r}")
+    return value
+
+
 def _rect(value) -> list[float]:
     if not (isinstance(value, (list, tuple)) and len(value) == 4):
         raise OpError(f"rect must be [x0, y0, x1, y1], got {value!r}")
-    return [float(v) for v in value]
+    return [
+        _number(v, f"rect coordinate {i}", minimum=-MAX_COORDINATE, maximum=MAX_COORDINATE)
+        for i, v in enumerate(value)
+    ]
 
 
 def _point(value) -> list[float]:
     if not (isinstance(value, (list, tuple)) and len(value) == 2):
         raise OpError(f"point must be [x, y], got {value!r}")
-    return [float(v) for v in value]
+    return [
+        _number(v, f"point coordinate {i}", minimum=-MAX_COORDINATE, maximum=MAX_COORDINATE)
+        for i, v in enumerate(value)
+    ]
 
 
 def _page_list(value, key: str = "pages") -> list[int]:
@@ -72,7 +118,7 @@ def _page_list(value, key: str = "pages") -> list[int]:
         raise OpError(f"{key} must be a non-empty list of 1-based page numbers")
     out = []
     for p in value:
-        if not (isinstance(p, int) and p >= 1):
+        if not (isinstance(p, int) and not isinstance(p, bool) and p >= 1):
             raise OpError(f"{key} entries must be 1-based integers, got {p!r}")
         out.append(p)
     return out
@@ -107,7 +153,13 @@ def validate(op: dict) -> dict:
         _require(op, "page")
         out["rect"] = _rect(_require(op, "rect"))
         _require(op, "text")
-        out["size"] = float(op.get("size", 11))
+        out["size"] = _number(
+            op.get("size", 11),
+            "size",
+            minimum=0.1,
+            maximum=MAX_FONT_SIZE,
+            strict_minimum=True,
+        )
 
     elif kind == "fill_field":
         _require(op, "field")
@@ -124,20 +176,35 @@ def validate(op: dict) -> dict:
         color = op.get("color", [0, 0, 0])
         if not (isinstance(color, (list, tuple)) and len(color) == 3):
             raise OpError(f"color must be [r, g, b] in 0..1, got {color!r}")
-        out["color"] = [float(c) for c in color]
-        out["width"] = float(op.get("width", 2))
+        out["color"] = [
+            _number(c, f"color component {i}", minimum=0, maximum=1)
+            for i, c in enumerate(color)
+        ]
+        out["width"] = _number(
+            op.get("width", 2),
+            "width",
+            minimum=0.0,
+            maximum=MAX_STROKE_WIDTH,
+            strict_minimum=True,
+        )
 
     elif kind == "place_signature":
         _require(op, "page")
         out["at"] = _point(_require(op, "at"))
-        out["width"] = float(op.get("width", 180))
+        out["width"] = _number(
+            op.get("width", 180),
+            "width",
+            minimum=0.0,
+            maximum=MAX_SIGNATURE_WIDTH,
+            strict_minimum=True,
+        )
         out["signature"] = op.get("signature", "default")
-        out["date"] = bool(op.get("date", False))
+        out["date"] = _boolean(op.get("date", False), "date")
 
     elif kind == "rotate_pages":
         out["pages"] = _page_list(_require(op, "pages"))
         degrees = _require(op, "degrees")
-        if degrees not in _ROTATE_DEGREES:
+        if isinstance(degrees, bool) or degrees not in _ROTATE_DEGREES:
             raise OpError(f"degrees must be one of {_ROTATE_DEGREES}, got {degrees!r}")
         out["degrees"] = degrees
 
@@ -147,13 +214,13 @@ def validate(op: dict) -> dict:
     elif kind == "move_pages":
         out["pages"] = _page_list(_require(op, "pages"))
         after = _require(op, "after")
-        if not (isinstance(after, int) and after >= 0):
+        if not (isinstance(after, int) and not isinstance(after, bool) and after >= 0):
             raise OpError(f"after must be a non-negative integer (0 = beginning), got {after!r}")
         out["after"] = after
 
     elif kind == "insert_pages":
         after = _require(op, "after")
-        if not (isinstance(after, int) and after >= 0):
+        if not (isinstance(after, int) and not isinstance(after, bool) and after >= 0):
             raise OpError(f"after must be a non-negative integer (0 = beginning), got {after!r}")
         out["after"] = after
         has_source = "source" in op
@@ -171,12 +238,24 @@ def validate(op: dict) -> dict:
             if not isinstance(blank, dict):
                 raise OpError("blank must be an object with count, width, height")
             count = blank.get("count", 1)
-            if not (isinstance(count, int) and count >= 1):
+            if not (isinstance(count, int) and not isinstance(count, bool) and count >= 1):
                 raise OpError(f"blank.count must be a positive integer, got {count!r}")
             out["blank"] = {
                 "count": count,
-                "width": float(blank.get("width", 595)),
-                "height": float(blank.get("height", 842)),
+                "width": _number(
+                    blank.get("width", 595),
+                    "blank.width",
+                    minimum=0.0,
+                    maximum=MAX_DIMENSION,
+                    strict_minimum=True,
+                ),
+                "height": _number(
+                    blank.get("height", 842),
+                    "blank.height",
+                    minimum=0.0,
+                    maximum=MAX_DIMENSION,
+                    strict_minimum=True,
+                ),
             }
         if has_image:
             out["image"] = str(_require(op, "image"))
@@ -194,14 +273,17 @@ def validate(op: dict) -> dict:
         fill = op.get("fill", [0, 0, 0])
         if not (isinstance(fill, (list, tuple)) and len(fill) == 3):
             raise OpError(f"fill must be [r, g, b] in 0..1, got {fill!r}")
-        out["fill"] = [float(c) for c in fill]
+        out["fill"] = [
+            _number(c, f"fill component {i}", minimum=0, maximum=1)
+            for i, c in enumerate(fill)
+        ]
         if "apply_now" in op:
-            out["apply_now"] = bool(op["apply_now"])
+            out["apply_now"] = _boolean(op["apply_now"], "apply_now")
 
     elif kind == "delete_annotation":
         _require(op, "page")
         index = _require(op, "index")
-        if not (isinstance(index, int) and index >= 0):
+        if not (isinstance(index, int) and not isinstance(index, bool) and index >= 0):
             raise OpError(f"index must be a non-negative integer, got {index!r}")
         out["index"] = index
 
@@ -228,12 +310,21 @@ def validate(op: dict) -> dict:
         color = op.get("color", [0, 0, 0])
         if not (isinstance(color, (list, tuple)) and len(color) == 3):
             raise OpError(f"color must be [r, g, b] in 0..1, got {color!r}")
-        out["color"] = [float(c) for c in color]
-        out["width"] = float(op.get("width", 2))
+        out["color"] = [
+            _number(c, f"color component {i}", minimum=0, maximum=1)
+            for i, c in enumerate(color)
+        ]
+        out["width"] = _number(
+            op.get("width", 2),
+            "width",
+            minimum=0.0,
+            maximum=MAX_STROKE_WIDTH,
+            strict_minimum=True,
+        )
 
     if "page" in out:
         page = out["page"]
-        if not (isinstance(page, int) and page >= 1):
+        if not (isinstance(page, int) and not isinstance(page, bool) and page >= 1):
             raise OpError(f"page must be a 1-based integer, got {page!r}")
 
     return out

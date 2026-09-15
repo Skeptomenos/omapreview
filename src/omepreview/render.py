@@ -8,11 +8,29 @@ the grid IS the ops coordinate system.
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 import pymupdf
 
 GRID_COLOR = (0.85, 0.2, 0.2)
+MIN_GRID_STEP = 1.0
+MAX_GRID_STEP = 10_000.0
+MIN_SNAPSHOT_SCALE = 0.05
+MAX_SNAPSHOT_SCALE = 4.0
+
+
+def _bounded_positive(
+    value: float, label: str, minimum: float, maximum: float
+) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{label} must be a finite number")
+    value = float(value)
+    if not math.isfinite(value):
+        raise ValueError(f"{label} must be finite")
+    if value < minimum or value > maximum:
+        raise ValueError(f"{label} must be between {minimum} and {maximum}")
+    return value
 
 
 def page_view_matrix(zoom: float) -> pymupdf.Matrix:
@@ -39,6 +57,13 @@ def snapshot(
 ) -> dict:
     """Render `page` (1-based) to PNG. grid=N overlays labeled lines every N
     points. Returns {"output", "page", "size": [w, h] in points}."""
+    scale = _bounded_positive(
+        scale, "scale", MIN_SNAPSHOT_SCALE, MAX_SNAPSHOT_SCALE
+    )
+    if grid is not None:
+        grid = _bounded_positive(
+            grid, "grid", MIN_GRID_STEP, MAX_GRID_STEP
+        )
     pdf = Path(pdf)
     if not pdf.is_file():
         raise FileNotFoundError(f"no such PDF: {pdf}")
@@ -49,11 +74,11 @@ def snapshot(
         pg = doc[page - 1]
         size = [pg.rect.width, pg.rect.height]
 
-        if grid:
+        if grid is not None:
             _draw_grid(pg, grid)
 
         if output is None:
-            suffix = f"-p{page}-grid.png" if grid else f"-p{page}.png"
+            suffix = f"-p{page}-grid.png" if grid is not None else f"-p{page}.png"
             output = pdf.with_name(pdf.stem + suffix)
         pix = raster_page(pg, scale)
         pix.save(str(output))
@@ -63,6 +88,7 @@ def snapshot(
 
 
 def _draw_grid(pg: pymupdf.Page, step: float) -> None:
+    step = _bounded_positive(step, "grid", MIN_GRID_STEP, MAX_GRID_STEP)
     width, height = pg.rect.width, pg.rect.height
     shape = pg.new_shape()
 

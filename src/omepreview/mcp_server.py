@@ -6,13 +6,14 @@ register with Claude Code:
 
     claude mcp add omepreview -- omepreview-mcp
 
-Safety posture: place_signature defaults to a dry run that returns the
-resolved placement rectangle for confirmation. Pass confirmed=true (after a
-human has approved the placement, or when the user has explicitly delegated
-signing) to write it.
+Safety posture: consequential tools default to a dry run that returns the
+resolved edit for confirmation. Pass the explicit confirmation flag (or
+``dry_run=false`` for the generic tool) after approval to write it.
 """
 
 from __future__ import annotations
+
+from pydantic import StrictBool
 
 try:  # MCP SDK v2
     from mcp.server.mcpserver import MCPServer as _Server
@@ -24,8 +25,14 @@ from . import engine, pages as pages_mod, read, signature
 mcp = _Server("omepreview")
 
 
+def _strict_bool(value: bool, name: str) -> bool:
+    if not isinstance(value, bool):
+        raise ValueError(f"{name} must be a boolean, got {value!r}")
+    return value
+
+
 @mcp.tool()
-def read_pdf(path: str, pages: list[int] | None = None, text_only: bool = False) -> dict:
+def read_pdf(path: str, pages: list[int] | None = None, text_only: StrictBool = False) -> dict:
     """Read a PDF's structure: pages, text blocks with bounding boxes, form
     fields, and annotations. Coordinates are PDF points, origin top-left —
     the same system every other omepreview tool accepts."""
@@ -39,11 +46,18 @@ def list_form_fields(path: str) -> list[dict]:
 
 
 @mcp.tool()
-def apply_ops(path: str, ops: list[dict], output: str | None = None, dry_run: bool = False) -> dict:
-    """Apply a list of operations (highlight, note, text_box, fill_field,
-    place_signature) in one atomic edit. See omepreview's ops spec. Prefer this
-    over many single calls when making several edits."""
-    return engine.apply(path, ops, output=output, dry_run=dry_run)
+def apply_ops(path: str, ops: list[dict], output: str | None = None, dry_run: StrictBool = True) -> dict:
+    """Apply a list of operations in one atomic edit. The default is a dry run
+    so a batch containing a consequential operation cannot write without an
+    explicit ``dry_run=false``. See omepreview's ops spec. Prefer this over
+    many single calls when making several edits."""
+    dry_run = _strict_bool(dry_run, "dry_run")
+    result = engine.apply(path, ops, output=output, dry_run=dry_run)
+    if dry_run:
+        result["needs_confirmation"] = (
+            "Dry run only. Re-call with dry_run=false after the user approves."
+        )
+    return result
 
 
 @mcp.tool()
@@ -80,8 +94,8 @@ def place_signature(
     y: float,
     width: float = 180,
     signature_name: str = "default",
-    date: bool = False,
-    confirmed: bool = False,
+    date: StrictBool = False,
+    confirmed: StrictBool = False,
     output: str | None = None,
 ) -> dict:
     """Place the user's saved signature with its top-left corner at (x, y).
@@ -90,6 +104,8 @@ def place_signature(
     show it to the user (or open the PDF) and call again with confirmed=true
     once approved. Signing a document is consequential: never set
     confirmed=true without the user's go-ahead."""
+    confirmed = _strict_bool(confirmed, "confirmed")
+    date = _strict_bool(date, "date")
     op = {
         "op": "place_signature",
         "page": page,
@@ -123,10 +139,11 @@ def delete_pages(
     path: str,
     pages: list[int],
     output: str | None = None,
-    confirm: bool = False,
+    confirm: StrictBool = False,
 ) -> dict:
     """Delete pages by 1-based number. Defaults to dry-run — pass confirm=true
     after the user approves."""
+    confirm = _strict_bool(confirm, "confirm")
     result = engine.apply(
         path,
         [{"op": "delete_pages", "pages": pages}],
@@ -146,9 +163,10 @@ def rotate_pages(
     pages: list[int],
     degrees: int,
     output: str | None = None,
-    dry_run: bool = False,
+    dry_run: StrictBool = False,
 ) -> dict:
     """Rotate pages by 90, 180, 270, or -90 degrees."""
+    dry_run = _strict_bool(dry_run, "dry_run")
     return engine.apply(
         path,
         [{"op": "rotate_pages", "pages": pages, "degrees": degrees}],
@@ -163,9 +181,10 @@ def move_pages(
     pages: list[int],
     after: int,
     output: str | None = None,
-    dry_run: bool = False,
+    dry_run: StrictBool = False,
 ) -> dict:
     """Reorder pages: move `pages` to after page `after` (0 = beginning)."""
+    dry_run = _strict_bool(dry_run, "dry_run")
     return engine.apply(
         path,
         [{"op": "move_pages", "pages": pages, "after": after}],
@@ -185,15 +204,16 @@ def insert_pages(
     blank_width: float = 595,
     blank_height: float = 842,
     image: str | None = None,
-    dry_run: bool = False,
+    dry_run: StrictBool = False,
 ) -> dict:
     """Insert pages after `after` from a source PDF, blank sheet(s), or image."""
+    dry_run = _strict_bool(dry_run, "dry_run")
     op: dict = {"op": "insert_pages", "after": after}
-    if source:
+    if source is not None:
         op["source"] = source
-        if source_pages:
+        if source_pages is not None:
             op["source_pages"] = source_pages
-    elif image:
+    elif image is not None:
         op["image"] = image
     elif blank_count is not None:
         op["blank"] = {
@@ -211,9 +231,10 @@ def extract_pages(
     path: str,
     pages: list[int],
     to: str,
-    dry_run: bool = False,
+    dry_run: StrictBool = False,
 ) -> dict:
     """Write selected pages to a new PDF at `to`. The source file is unchanged."""
+    dry_run = _strict_bool(dry_run, "dry_run")
     return engine.apply(
         path,
         [{"op": "extract_pages", "pages": pages, "to": to}],
@@ -227,11 +248,12 @@ def delete_annotation(
     page: int,
     index: int,
     output: str | None = None,
-    confirm: bool = False,
+    confirm: StrictBool = False,
 ) -> dict:
     """Delete one annotation on `page` by 0-based `index` (see omepreview read).
 
     Defaults to dry-run — pass confirm=true after the user approves."""
+    confirm = _strict_bool(confirm, "confirm")
     result = engine.apply(
         path,
         [{"op": "delete_annotation", "page": page, "index": index}],
@@ -253,20 +275,21 @@ def redact(
     rect: list[float] | None = None,
     fill: list[float] | None = None,
     output: str | None = None,
-    confirm: bool = False,
+    confirm: StrictBool = False,
 ) -> dict:
     """Permanently remove text or image pixels in a region on `page`.
 
     Provide exactly one of `match` (text search) or `rect` ([x0,y0,x1,y1]).
     Defaults to dry-run — pass confirm=true after the user approves."""
+    confirm = _strict_bool(confirm, "confirm")
     op: dict = {"op": "redact", "page": page}
-    if match:
+    if match is not None:
         op["match"] = match
-    elif rect:
+    elif rect is not None:
         op["rect"] = rect
     else:
         raise ValueError("redact needs match or rect")
-    if fill:
+    if fill is not None:
         op["fill"] = fill
     result = engine.apply(path, [op], output=output, dry_run=not confirm)
     if not confirm:
@@ -282,11 +305,12 @@ def crop_pages(
     pages: list[int],
     rect: list[float],
     output: str | None = None,
-    dry_run: bool = False,
+    dry_run: StrictBool = False,
 ) -> dict:
     """Set the PDF CropBox for ``pages`` to ``rect`` ([x0, y0, x1, y1] in the
     page's current coordinate space, top-left origin). Does not trim content —
     it changes the visible page box."""
+    dry_run = _strict_bool(dry_run, "dry_run")
     return engine.apply(
         path,
         [{"op": "crop_pages", "pages": pages, "rect": rect}],
