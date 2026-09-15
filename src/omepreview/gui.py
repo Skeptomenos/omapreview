@@ -1040,34 +1040,42 @@ class Editor:
                         )
                     )
             elif kind == "fill_field":
-                matches = [
-                    (page_no, widget)
-                    for page_no in range(self.doc.page_count)
-                    for widget in (self.doc[page_no].widgets() or [])
-                    if widget.field_name == op["field"]
-                ]
-                if not matches:
+                field_match = None
+                for page_no in range(self.doc.page_count):
+                    pdf_page = self.doc[page_no]
+                    for widget in pdf_page.widgets() or []:
+                        if widget.field_name == op["field"]:
+                            field_match = (page_no, list(widget.rect))
+                            break
+                    if field_match is not None:
+                        break
+                if field_match is None:
                     raise OpError(
                         f"proposal rejected: no form field named {op['field']!r} "
                         "was found in the document"
                     )
-                field_page, widget = matches[0]
+                field_page, field_rect = field_match
                 proposed.append({
                     "kind": "field_fill", "page": field_page,
                     "field": op["field"], "value": op["value"],
-                    "rect": list(widget.rect),
+                    "rect": field_rect,
                 })
             elif kind == "delete_annotation":
-                annots = list(self.doc[page].annots() or [])
-                if op["index"] >= len(annots):
+                pdf_page = self.doc[page]
+                annotation_match = None
+                for annotation_index, annot in enumerate(pdf_page.annots() or []):
+                    if annotation_index == op["index"]:
+                        annotation_match = (list(annot.rect), annot.type[1])
+                        break
+                if annotation_match is None:
                     raise OpError(
                         f"proposal rejected: annotation index {op['index']} is "
                         f"out of range on page {op['page']}"
                     )
-                annot = annots[op["index"]]
+                annot_rect, annot_type = annotation_match
                 proposed.append({
                     "kind": "delete_annot", "page": page, "index": op["index"],
-                    "rect": list(annot.rect), "annot_type": annot.type[1],
+                    "rect": annot_rect, "annot_type": annot_type,
                 })
         self.pending.extend(proposed)
         if proposed:

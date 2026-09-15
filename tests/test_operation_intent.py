@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import math
+import subprocess
+import sys
 from pathlib import Path
 
 import pymupdf
@@ -31,6 +33,54 @@ def _make_sized_pdf(path: Path, width: float, height: float) -> Path:
     doc.save(str(path))
     doc.close()
     return path
+
+
+def _make_object_target_pdf(path: Path) -> Path:
+    doc = pymupdf.open()
+    page = doc.new_page(width=595, height=842)
+    page.insert_text((40, 80), "Contract body text", fontsize=14)
+    annot = page.add_highlight_annot(page.search_for("Contract")[0])
+    annot.update()
+    widget = pymupdf.Widget()
+    widget.field_name = "answer"
+    widget.field_type = pymupdf.PDF_WIDGET_TYPE_TEXT
+    widget.rect = pymupdf.Rect(160, 180, 400, 198)
+    page.add_widget(widget)
+    doc.save(str(path))
+    doc.close()
+    return path
+
+
+def _load_proposal_in_subprocess(pdf: Path, proposal: Path) -> dict:
+    script = """
+import json
+import sys
+
+from omepreview.gui import Editor
+
+editor = Editor(sys.argv[1], None)
+try:
+    try:
+        editor._load_proposals(sys.argv[2])
+    except Exception as exc:
+        result = {"error": str(exc), "pending": editor.pending}
+    else:
+        result = {"pending": editor.pending, "ops": editor.to_ops()}
+    print("PROPOSAL_RESULT=" + json.dumps(result))
+finally:
+    editor.doc.close()
+"""
+    completed = subprocess.run(
+        [sys.executable, "-X", "faulthandler", "-c", script, str(pdf), str(proposal)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    result_line = next(
+        line for line in completed.stdout.splitlines() if line.startswith("PROPOSAL_RESULT=")
+    )
+    return json.loads(result_line.removeprefix("PROPOSAL_RESULT="))
 
 
 def test_apply_now_rejects_string_booleans():
@@ -238,6 +288,53 @@ def test_proposal_round_trip_preserves_supported_intent(tmp_path):
     finally:
         if editor.doc is not None and not editor.doc.is_closed:
             editor.doc.close()
+
+
+def test_proposal_object_targets_keep_their_page_alive(tmp_path):
+    pdf = _make_object_target_pdf(tmp_path / "object-targets.pdf")
+    proposal = tmp_path / "object-targets.json"
+    source_ops = [
+        {"op": "fill_field", "field": "answer", "value": "verified"},
+        {"op": "delete_annotation", "page": 1, "index": 0},
+    ]
+    proposal.write_text(json.dumps(source_ops), encoding="utf-8")
+
+    result = _load_proposal_in_subprocess(pdf, proposal)
+
+    assert result["ops"] == source_ops
+    assert result["pending"][0]["rect"] == [160.0, 180.0, 400.0, 198.0]
+    assert result["pending"][1]["annot_type"] == "Highlight"
+    assert len(result["pending"][1]["rect"]) == 4
+
+
+@pytest.mark.parametrize(
+    "source_ops, message",
+    [
+        (
+            [
+                {"op": "delete_annotation", "page": 1, "index": 0},
+                {"op": "fill_field", "field": "missing", "value": "x"},
+            ],
+            "no form field named 'missing'",
+        ),
+        (
+            [
+                {"op": "fill_field", "field": "answer", "value": "verified"},
+                {"op": "delete_annotation", "page": 1, "index": 9},
+            ],
+            "annotation index 9 is out of range",
+        ),
+    ],
+)
+def test_invalid_proposal_object_target_is_atomic(tmp_path, source_ops, message):
+    pdf = _make_object_target_pdf(tmp_path / "object-targets.pdf")
+    proposal = tmp_path / "invalid-object-target.json"
+    proposal.write_text(json.dumps(source_ops), encoding="utf-8")
+
+    result = _load_proposal_in_subprocess(pdf, proposal)
+
+    assert message in result["error"]
+    assert result["pending"] == []
 
 
 def test_unsupported_proposal_is_rejected_without_partial_load(tmp_path):
