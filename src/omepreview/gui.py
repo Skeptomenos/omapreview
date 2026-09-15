@@ -65,6 +65,9 @@ from .view_gestures import (
     delete_selected_ghost,
     handle_hit_radius,
     hit_resize_handle,
+    matrix_delta,
+    matrix_point,
+    matrix_rect,
     mapped_point,
     page_y_at_focus,
     pinch_live_pct,
@@ -1225,8 +1228,16 @@ class Editor:
                 it[k] += dx
             for k in ("y0", "y1"):
                 it[k] += dy
+        elif it["kind"] in ("field_fill", "delete_annot"):
+            # These ghosts identify an existing document target. Moving their
+            # rectangle would suggest that Save also moves the widget or
+            # annotation, but their operations intentionally carry identity,
+            # not geometry. Keep the visual target anchored and make drag a
+            # safe no-op.
+            return False
         else:
             it["strokes"] = [[(px + dx, py + dy) for px, py in s] for s in it["strokes"]]
+        return True
 
 
 def pdf_open_dialog() -> Gtk.FileDialog:
@@ -1261,6 +1272,15 @@ def run(pdf: str | None = None, ops_file: str | None = None) -> int:
             win.set_decorated(False)
         win.add_css_class("omapdf-editor")
         ed.window = win
+
+        def on_close(_win):
+            # Async page paste callbacks use this identity to reject results
+            # that arrive after the window has been closed or replaced.
+            if ed.window is win:
+                ed.window = None
+            return False
+
+        win.connect("close-request", on_close)
         chrome = {
             "desk": (0.92, 0.91, 0.91),
             "fg": (0.18, 0.2, 0.21),
@@ -1335,11 +1355,21 @@ def run(pdf: str | None = None, ops_file: str | None = None) -> int:
 
         def to_page_point(cx: float, cy: float) -> tuple[float, float]:
             ox, oy = ed.page_origin
-            return ((cx - ox) / ed.zoom, (cy - oy) / ed.zoom)
+            page = ed.page()
+            return matrix_point(
+                page.derotation_matrix,
+                (cx - ox) / ed.zoom,
+                (cy - oy) / ed.zoom,
+            )
 
         def to_view_point(px: float, py: float) -> tuple[float, float]:
             ox, oy = ed.page_origin
-            return (ox + px * ed.zoom, oy + py * ed.zoom)
+            page = ed.page()
+            vx, vy = matrix_point(page.rotation_matrix, px, py)
+            return (ox + vx * ed.zoom, oy + vy * ed.zoom)
+
+        def to_view_rect(rect) -> tuple[float, float, float, float]:
+            return matrix_rect(ed.page().rotation_matrix, rect)
 
         def capture_v_anchor(viewport_y: float | None = None) -> dict:
             vadj = scroller.get_vadjustment()
@@ -1479,6 +1509,17 @@ def run(pdf: str | None = None, ops_file: str | None = None) -> int:
                 return
             ctx.translate(ox, oy)
             ctx.scale(ed.zoom, ed.zoom)
+            rotation = ed.page().rotation_matrix
+            ctx.transform(
+                cairo.Matrix(
+                    rotation.a,
+                    rotation.b,
+                    rotation.c,
+                    rotation.d,
+                    rotation.e,
+                    rotation.f,
+                )
+            )
             for it in ed.pending:
                 if it["page"] == ed.page_no:
                     draw_item(ctx, it)
@@ -2017,8 +2058,15 @@ def run(pdf: str | None = None, ops_file: str | None = None) -> int:
                     ed.drag_base = None
                 elif hit_item:
                     ed.selected = hit_item
-                    ed.checkpoint()
-                    ed.drag_base = (0.0, 0.0)
+                    if hit_item.get("kind") in ("field_fill", "delete_annot"):
+                        # Identity ghosts are anchored to their document
+                        # target. A drag selects them but never moves a real
+                        # widget/annotation or creates a misleading history
+                        # entry.
+                        ed.drag_base = None
+                    else:
+                        ed.checkpoint()
+                        ed.drag_base = (0.0, 0.0)
                     ed.drag_resize = None
                 else:
                     saved = ed.hit_saved_annot(px, py)
@@ -2028,7 +2076,12 @@ def run(pdf: str | None = None, ops_file: str | None = None) -> int:
             area.queue_draw()
 
         def on_drag_update(_g, dx, dy):
-            pdx, pdy = dx / ed.zoom, dy / ed.zoom
+            page = ed.page()
+            pdx, pdy = matrix_delta(
+                page.derotation_matrix,
+                dx / ed.zoom,
+                dy / ed.zoom,
+            )
             if ed.tool == "pen" and ed.live_stroke is not None:
                 sx, sy = ed.live_stroke[0]
                 ed.live_stroke.append((sx + pdx, sy + pdy))
@@ -3363,38 +3416,60 @@ def run(pdf: str | None = None, ops_file: str | None = None) -> int:
                 # When the thumbnail rail is open this used to fall into the
                 # side_toggle branch and return without removing the ghost.
                 ed.delete_selected()
-            elif side_toggle.get_active():
-                if ctrl and keyval == Gdk.KEY_v:
-                    sidebar_api["paste_pages"]()
-                    return True
-                if sidebar_api["has_page_selection"]():
-                    if ctrl and keyval == Gdk.KEY_c:
-                        sidebar_api["copy_selected_pages"]()
-                        return True
-                    if ctrl and keyval == Gdk.KEY_x:
-                        sidebar_api["cut_selected_pages"]()
-                        return True
-            elif sidebar_api["sidebar_focus"]["active"] or side_toggle.get_active():
-                if keyval in (Gdk.KEY_Delete, Gdk.KEY_BackSpace):
-                    sidebar_api["delete_selected_pages"]()
-                    area.queue_draw()
-                    refresh_title()
-                    return True
-                if ctrl and keyval == Gdk.KEY_r and shift:
-                    sidebar_api["rotate_selected"](-90)
-                    area.queue_draw()
-                    refresh_title()
-                    return True
-                if ctrl and keyval == Gdk.KEY_r:
-                    sidebar_api["rotate_selected"](90)
-                    area.queue_draw()
-                    refresh_title()
-                    return True
-                if keyval == Gdk.KEY_b:
-                    sidebar_api["insert_blank_after_current"]()
-                    area.queue_draw()
-                    refresh_title()
-                    return True
+            elif side_toggle.get_active() and ctrl and keyval == Gdk.KEY_v:
+                sidebar_api["paste_pages"]()
+                return True
+            elif (
+                side_toggle.get_active()
+                and sidebar_api["has_page_selection"]()
+                and ctrl
+                and keyval == Gdk.KEY_c
+            ):
+                sidebar_api["copy_selected_pages"]()
+                return True
+            elif (
+                side_toggle.get_active()
+                and sidebar_api["has_page_selection"]()
+                and ctrl
+                and keyval == Gdk.KEY_x
+            ):
+                sidebar_api["cut_selected_pages"]()
+                return True
+            elif (
+                (sidebar_api["sidebar_focus"]["active"] or side_toggle.get_active())
+                and keyval in (Gdk.KEY_Delete, Gdk.KEY_BackSpace)
+            ):
+                sidebar_api["delete_selected_pages"]()
+                area.queue_draw()
+                refresh_title()
+                return True
+            elif (
+                (sidebar_api["sidebar_focus"]["active"] or side_toggle.get_active())
+                and ctrl
+                and keyval == Gdk.KEY_r
+                and shift
+            ):
+                sidebar_api["rotate_selected"](-90)
+                area.queue_draw()
+                refresh_title()
+                return True
+            elif (
+                (sidebar_api["sidebar_focus"]["active"] or side_toggle.get_active())
+                and ctrl
+                and keyval == Gdk.KEY_r
+            ):
+                sidebar_api["rotate_selected"](90)
+                area.queue_draw()
+                refresh_title()
+                return True
+            elif (
+                (sidebar_api["sidebar_focus"]["active"] or side_toggle.get_active())
+                and keyval == Gdk.KEY_b
+            ):
+                sidebar_api["insert_blank_after_current"]()
+                area.queue_draw()
+                refresh_title()
+                return True
             elif ctrl and keyval in (Gdk.KEY_z, Gdk.KEY_Z) and shift:
                 do_redo()
             elif ctrl and keyval == Gdk.KEY_z:
@@ -3527,7 +3602,8 @@ def run(pdf: str | None = None, ops_file: str | None = None) -> int:
             def scroll_to():
                 adj = scroller.get_vadjustment()
                 _, page_y = ed.page_origin
-                adj.set_value(max(0, page_y + rect.y0 * ed.zoom - scroller.get_height() / 3))
+                _, hit_y, _, _ = to_view_rect(rect)
+                adj.set_value(max(0, page_y + hit_y * ed.zoom - scroller.get_height() / 3))
                 return False
 
             GLib.idle_add(scroll_to)

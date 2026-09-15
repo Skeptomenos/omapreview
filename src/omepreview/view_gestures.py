@@ -107,6 +107,41 @@ def mapped_point(mapped) -> tuple[float, float] | None:
     return ax, ay
 
 
+def matrix_point(matrix, x: float, y: float) -> tuple[float, float]:
+    """Apply a PyMuPDF-style affine matrix to a point.
+
+    PyMuPDF page matrices use the same top-left, y-down coordinate system as
+    the editor's drawing area. Keeping this small helper duck-typed makes the
+    page transform tests independent of GTK.
+    """
+    return (
+        matrix.a * x + matrix.c * y + matrix.e,
+        matrix.b * x + matrix.d * y + matrix.f,
+    )
+
+
+def matrix_delta(matrix, dx: float, dy: float) -> tuple[float, float]:
+    """Apply only the linear part of *matrix* to a drag delta."""
+    return (
+        matrix.a * dx + matrix.c * dy,
+        matrix.b * dx + matrix.d * dy,
+    )
+
+
+def matrix_rect(matrix, rect) -> tuple[float, float, float, float]:
+    """Return the axis-aligned bounds of a transformed rectangle."""
+    x0, y0, x1, y1 = rect
+    points = (
+        matrix_point(matrix, x0, y0),
+        matrix_point(matrix, x1, y0),
+        matrix_point(matrix, x0, y1),
+        matrix_point(matrix, x1, y1),
+    )
+    xs = [point[0] for point in points]
+    ys = [point[1] for point in points]
+    return min(xs), min(ys), max(xs), max(ys)
+
+
 def compute_pinch_focus(gesture, scroller, area) -> tuple[float, tuple[float, float]]:
     """Scroller-relative Y and drawing-area XY of a pinch (else viewport center).
 

@@ -22,7 +22,7 @@ from .export_guard import (
 from .page_clipboard import (
     MIME_PDF,
     push_clipboard,
-    read_clipboard_pdf_bytes,
+    read_clipboard_pdf_bytes_async,
     write_temp_pdf,
 )
 from .ops import OpError
@@ -71,6 +71,7 @@ def build_page_sidebar(
     anchor: int | None = None
     sidebar_focus = {"active": False}
     row_widgets: list[Gtk.Widget] = []
+    paste_state = {"cancellable": None, "generation": 0}
 
     side_list = Gtk.ListBox()
     side_list.add_css_class("omapdf-thumbs")
@@ -618,23 +619,57 @@ def build_page_sidebar(
         return True
 
     def paste_pages() -> bool:
-        pdf_bytes = read_clipboard_pdf_bytes()
-        if not pdf_bytes:
-            toast("Clipboard has no omepreview pages")
-            return False
-        after = insert_after_focus()
-        tmp = write_temp_pdf(pdf_bytes)
-        try:
-            ed.checkpoint()
-            preview.add_insert_pdf(after, str(tmp), retain_source=True)
-            touch_preview()
-            on_change()
-            toast(f"Pasted pages after {after}")
-            return True
-        except Exception as exc:
-            tmp.unlink(missing_ok=True)
-            toast(f"Paste failed: {exc}")
-            return False
+        target_window = getattr(ed, "window", None)
+        target_doc = ed.doc
+        target_path = ed.path
+
+        paste_state["generation"] += 1
+        generation = paste_state["generation"]
+        previous = paste_state["cancellable"]
+        if previous is not None:
+            try:
+                previous.cancel()
+            except Exception:
+                pass
+            paste_state["cancellable"] = None
+
+        def still_active() -> bool:
+            """Reject a late clipboard result after close or document switch."""
+            return (
+                target_window is not None
+                and getattr(ed, "window", None) is target_window
+                and ed.has_document()
+                and ed.doc is target_doc
+                and ed.path == target_path
+                and not target_doc.is_closed
+            )
+
+        def finish(pdf_bytes: bytes | None):
+            if paste_state["generation"] == generation:
+                paste_state["cancellable"] = None
+            if not still_active():
+                return
+            if not pdf_bytes:
+                toast("Clipboard has no omepreview pages")
+                return
+            after = insert_after_focus()
+            tmp = None
+            try:
+                tmp = write_temp_pdf(pdf_bytes)
+                ed.checkpoint()
+                preview.add_insert_pdf(after, str(tmp), retain_source=True)
+                touch_preview()
+                on_change()
+                toast(f"Pasted pages after {after}")
+            except Exception as exc:
+                if tmp is not None:
+                    tmp.unlink(missing_ok=True)
+                toast(f"Paste failed: {exc}")
+
+        cancellable = read_clipboard_pdf_bytes_async(finish)
+        if paste_state["generation"] == generation:
+            paste_state["cancellable"] = cancellable
+        return True
 
     def cut_selected_pages() -> bool:
         if not copy_selected_pages():

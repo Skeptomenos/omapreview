@@ -38,7 +38,10 @@ def test_delete_key_removes_ghost_before_sidebar_pages():
     body = text[text.index("def on_key") : text.index("keys.connect")]
     assert "ed.delete_selected()" in body
     assert body.index("ed.delete_selected()") < body.index("delete_selected_pages")
-    assert body.index("ed.delete_selected()") < body.index("elif side_toggle.get_active():")
+    # Sidebar shortcuts are now separate guarded branches. A broad sidebar
+    # branch would swallow undo, navigation, and other global keys.
+    assert "elif side_toggle.get_active():" not in body
+    assert "elif side_toggle.get_active() and ctrl and keyval == Gdk.KEY_v:" in body
 
 
 def test_sign_click_always_presents_gallery():
@@ -88,4 +91,3 @@ def test_live_gtk_popover_capsule_is_not_treated_as_null():
     from omepreview.popover_safe import popover_try_set_autohide
 
     assert popover_try_set_autohide(pop, True) is True
-

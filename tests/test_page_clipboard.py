@@ -2,6 +2,7 @@
 
 import base64
 import json
+import time
 
 import pymupdf
 
@@ -12,6 +13,7 @@ from omepreview.page_clipboard import (
     pdf_bytes_from_clipboard_text,
     push_clipboard,
     read_clipboard_pdf_bytes,
+    read_clipboard_pdf_bytes_async,
     serialize_pages,
     write_pages_to_file,
 )
@@ -96,3 +98,53 @@ def test_gtk_clipboard_roundtrip():
     assert out.page_count == 1
     assert "clip test" in out[0].get_text()
     out.close()
+
+
+def test_gtk_clipboard_async_roundtrip_calls_back_once():
+    import gi
+
+    gi.require_version("Gdk", "4.0")
+    gi.require_version("GLib", "2.0")
+    from gi.repository import Gdk, GLib
+
+    if Gdk.Display.get_default() is None:
+        return
+    doc = pymupdf.open()
+    doc.new_page()
+    doc[0].insert_text((72, 72), "async clip test")
+    json_bytes, pdf_bytes = serialize_pages(doc, [1])
+    doc.close()
+    push_clipboard(json_bytes, pdf_bytes)
+    seen = []
+    read_clipboard_pdf_bytes_async(seen.append)
+    ctx = GLib.MainContext.default()
+    deadline = time.monotonic() + 2.0
+    while not seen and time.monotonic() < deadline:
+        if ctx.pending():
+            ctx.iteration(False)
+        else:
+            time.sleep(0.005)
+    assert seen == [pdf_bytes]
+
+
+def test_gtk_clipboard_async_cancel_calls_back_once():
+    import gi
+
+    gi.require_version("Gdk", "4.0")
+    gi.require_version("GLib", "2.0")
+    from gi.repository import Gdk, GLib
+
+    if Gdk.Display.get_default() is None:
+        return
+    seen = []
+    cancellable = read_clipboard_pdf_bytes_async(seen.append, timeout_ms=500)
+    assert cancellable is not None
+    cancellable.cancel()
+    ctx = GLib.MainContext.default()
+    deadline = time.monotonic() + 1.0
+    while not seen and time.monotonic() < deadline:
+        if ctx.pending():
+            ctx.iteration(False)
+        else:
+            time.sleep(0.005)
+    assert len(seen) == 1
