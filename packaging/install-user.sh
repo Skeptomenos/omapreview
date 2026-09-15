@@ -23,6 +23,11 @@ fi
 "${VENV}/bin/pip" install -e "${ROOT}"
 
 mkdir -p "${BIN_DIR}" "${APP_DIR}"
+install -Dm644 "${ROOT}/share/icons/omapreview.png" \
+  "${HOME}/.local/share/icons/hicolor/512x512/apps/omapreview.png"
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+  gtk-update-icon-cache -f -t "${HOME}/.local/share/icons/hicolor"
+fi
 ln -sfn "${VENV}/bin/omapreview" "${BIN_DIR}/omapreview"
 # Keep the Python package command working in a terminal too.
 ln -sfn "${VENV}/bin/omepreview" "${BIN_DIR}/omepreview"

@@ -27,6 +27,10 @@ package() {
 
   install -Dm755 bin/omepreview-pick "$pkgdir/usr/bin/omepreview-pick"
   install -Dm644 share/omapreview.desktop "$pkgdir/usr/share/applications/omapreview.desktop"
+  # The pinned v0.1.0 archive predates the custom icon.
+  if [[ -f share/icons/omapreview.png ]]; then
+    install -Dm644 share/icons/omapreview.png "$pkgdir/usr/share/icons/hicolor/512x512/apps/omapreview.png"
+  fi
 
   install -d "$pkgdir/usr/share/omapreview"
   cp -r shell-plugin "$pkgdir/usr/share/omapreview/shell-plugin"

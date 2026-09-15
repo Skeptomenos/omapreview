@@ -1032,6 +1032,7 @@ def pdf_open_dialog() -> Gtk.FileDialog:
 
 
 def run(pdf: str | None = None, ops_file: str | None = None) -> int:
+    Gtk.Window.set_default_icon_name("omapreview")
     _sync_color_scheme()
     ed = Editor(pdf, ops_file)
     app = Gtk.Application(

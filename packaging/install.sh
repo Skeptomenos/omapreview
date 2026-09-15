@@ -63,6 +63,15 @@ sed \
   "${SRC}/share/omapreview.desktop" > "${DESKTOP_DST}"
 rm -f "${APP_DIR}/omepreview.desktop"
 
+# Older release archives predate the custom icon and retain their PDF icon.
+if [[ -f "${SRC}/share/icons/omapreview.png" ]]; then
+  install -Dm644 "${SRC}/share/icons/omapreview.png" \
+    "${HOME}/.local/share/icons/hicolor/512x512/apps/omapreview.png"
+  if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+    gtk-update-icon-cache -f -t "${HOME}/.local/share/icons/hicolor"
+  fi
+fi
+
 if command -v update-desktop-database >/dev/null 2>&1; then
   update-desktop-database "${APP_DIR}"
 fi

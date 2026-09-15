@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="share/icons/omapreview.png" alt="omapreview app icon" width="128" />
+</p>
+
 # omapreview
 
 **Human-friendly, agent-native PDF review for Linux.**

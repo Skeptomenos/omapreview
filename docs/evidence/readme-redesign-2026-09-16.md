@@ -63,6 +63,23 @@ for `omapreview-proposal.png`.
 
 ## Validation
 
+### App icon follow-up
+
+- The approved hills-and-sun icon master is `docs/assets/omapreview-icon.png`.
+  The installed 512-pixel PNG is `share/icons/omapreview.png`.
+- The checkout installer installs the icon into the user's hicolor theme.
+  The desktop entry and GTK window use the `omapreview` icon name. The README
+  displays the same asset for GitHub visitors.
+- Release packaging installs the same icon. The visitor installer supports
+  archives containing it and keeps compatibility with the older archive.
+  The pinned v0.1.0 archives must be replaced by a new release before public
+  release installs receive the icon.
+- Icon generation used the built-in image tool with the supplied crop as a
+  reference: rounded square, large apricot sun, three simplified blue hills,
+  ivory sky, subtle paper texture, transparent corners, and no text.
+
+### README checks
+
 - README local asset links resolve, `git diff --check` is clean, and the
   fixture generator compiles.
 - CLI checks passed for `--version`, `read --json`, `apply --dry-run --json`,
