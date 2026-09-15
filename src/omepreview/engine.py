@@ -11,6 +11,8 @@ from __future__ import annotations
 import datetime
 import os
 import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import pymupdf
@@ -26,6 +28,25 @@ def _page(doc: pymupdf.Document, number: int) -> pymupdf.Page:
     if number < 1 or number > doc.page_count:
         raise OpError(f"page {number} out of range (document has {doc.page_count})")
     return doc[number - 1]
+
+
+@contextmanager
+def _unrotated_content_write(page: pymupdf.Page) -> Iterator[None]:
+    """Keep content writers in the public unrotated, crop-local frame.
+
+    PyMuPDF content insertion and redaction fill can offset cropped pages when
+    /Rotate is nonzero. Annotation geometry and extracted text already use
+    the unrotated frame. Clear only rotation while writing content; never
+    change boxes or compensate with a hard-coded crop offset.
+    """
+    rotation = page.rotation
+    try:
+        if rotation:
+            page.set_rotation(0)
+        yield
+    finally:
+        if rotation:
+            page.set_rotation(rotation)
 
 
 def _apply_highlight(doc, op) -> dict:
@@ -103,15 +124,15 @@ def _apply_place_signature(doc, op) -> dict:
     height = width * ratio
     x, y = op["at"]
     rect = pymupdf.Rect(x, y, x + width, y + height)
-    sig_store.insert_on_page(page, rect, image)
-
     result = {"rect": list(rect), "signature": op["signature"]}
-    if op["date"]:
-        date_str = datetime.date.today().isoformat()
-        page.insert_text(
-            pymupdf.Point(x, y + height + 12), date_str, fontsize=10, fontname="helv"
-        )
-        result["date"] = date_str
+    with _unrotated_content_write(page):
+        sig_store.insert_on_page(page, rect, image)
+        if op["date"]:
+            date_str = datetime.date.today().isoformat()
+            page.insert_text(
+                pymupdf.Point(x, y + height + 12), date_str, fontsize=10, fontname="helv"
+            )
+            result["date"] = date_str
     return result
 
 
@@ -420,9 +441,10 @@ def _apply_redact(doc, op, *, dry_run: bool) -> dict:
             page.add_redact_annot(rect, fill=fill)
         return result
 
-    for rect in rects:
-        page.add_redact_annot(rect, fill=fill)
-    page.apply_redactions(images=pymupdf.PDF_REDACT_IMAGE_PIXELS)
+    with _unrotated_content_write(page):
+        for rect in rects:
+            page.add_redact_annot(rect, fill=fill)
+        page.apply_redactions(images=pymupdf.PDF_REDACT_IMAGE_PIXELS)
 
     verify = _verify_redact(page, verify_match, rects)
     result["verify"] = verify

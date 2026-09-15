@@ -30,6 +30,9 @@ Consequential MCP tools (`place_signature`, `delete_pages`, `redact`,
 - **Coordinates are PDF points** (1/72"), origin at the **top-left** of the
   page, y growing downward — identical to what `omepreview read` reports, so a
   bbox from a read can be passed straight back as a target.
+- On cropped or rotated pages, coordinates stay relative to the unrotated
+  CropBox. Signature placement, date text, and redaction fill use this same
+  frame. These writes preserve the page rotation and both page boxes.
 - Every applied op is echoed back in the report with its resolved geometry
   (`rects`, `rect`, `page`) and `"applied": true|false` (false = dry run).
 - Validation is strict: unknown ops, missing keys, and unmatched text fail
