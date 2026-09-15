@@ -1,143 +1,147 @@
 # omapreview
 
-**A Preview-class PDF studio for Omarchy and plain GTK Linux.** · **0.1.0**
+**Human-friendly, agent-native PDF review for Linux.**
 
-Command and launcher name: **omapreview**. Super+Space opens an empty editor;
-Open (Ctrl+O) picks a PDF. Humans mark up on paper-on-desk chrome. Agents
-speak the same JSON ops.
+omapreview is a focused GTK4 workspace for reading, annotating, signing,
+redacting, and rearranging PDFs. It is built for Omarchy and works on plain
+GTK Linux too.
 
 <p align="center">
-  <img src="docs/screenshots/empty-window.png" alt="omapreview — empty launch, Open a PDF" width="720" />
+  <img src="docs/assets/readme-hills.jpg" alt="Layered blue hills on warm paper" width="760" />
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/open-from-app.png" alt="omapreview — PDF opened from the app" width="720" />
+  <img src="docs/screenshots/omapreview-editor.png" alt="omapreview GTK4 editor showing a three-page synthetic document" width="820" />
 </p>
+
+<p align="center"><sub>Real GTK4 editor pixels. The document is a reproducible synthetic fixture; no personal PDFs are used.</sub></p>
+
+## One workbench, two ways to work
+
+| For people | For agents |
+| --- | --- |
+| Open a PDF, mark it up, nudge proposed changes, and Save when the page looks right. | Read structured text and bboxes, build JSON ops, and run the same engine through the CLI or optional MCP server. |
+
+The editor keeps proposed changes visible as movable ghosts until Save. The
+CLI and MCP server use the same JSON operation contract, so a human can review
+what an agent proposes before it is written.
+
+## Read, mark, hand off
 
 <p align="center">
-  <img src="docs/screenshots/gtk-light-fit-editorial.png" alt="omapreview — light theme, page fit" width="360" />
-  &nbsp;
-  <img src="docs/screenshots/gtk-dark-fit-editorial.png" alt="omapreview — dark theme" width="360" />
+  <img src="docs/screenshots/omapreview-proposal.png" alt="omapreview showing proposed highlight and note ghosts over the synthetic document" width="820" />
 </p>
 
-<p align="center">
-  <img src="docs/screenshots/gtk-signature-idle.png" alt="omapreview — Space to start trackpad signature" width="360" />
-  &nbsp;
-  <img src="docs/screenshots/gtk-signature-draw.png" alt="omapreview — trackpad signature recording" width="360" />
-</p>
+### Review
 
-## The problem
+Open an empty editor from the Omarchy launcher, or open a file directly. Use
+the page rail and thumbnails to move through the document. Search is available
+with Ctrl+F.
 
-Linux still does not have a Preview.app. Viewers show a page. Office suites
-import a PDF as a drawing. Acrobat is not the daily driver on Omarchy.
-“Redact” is too often a black rectangle that still contains the text.
-Signatures are screenshots. Page surgery means a second tool.
+### Annotate
 
-Agents that edit PDFs usually fork a one-off script. The human then cannot
-open the same file in an editor that shares that write path — so the last
-mile is copy-paste, or a surprise overwrite.
+Highlight, underline, strike out, add notes, draw with ink, add shapes, place
+saved signatures, fill form fields, crop, redact, and manage pages. Redaction
+removes the matched content; a black drawing is not a redact.
 
-You need one studio that opens empty from Super+Space, lets you pick a PDF
-in-app, marks up, signs, knifes pages, redacts for real, and lets an agent
-propose the same ops as ghosts you can nudge and Save.
+### Automate
 
-## Why omapreview
-
-- **Preview-class launch.** The desktop `Exec` is `omapreview edit %f` — no
-  file-picker in the launcher. No file → empty window. A PDF from the file
-  manager still opens via `%f`.
-- **One engine.** GTK editor, CLI, and optional MCP server all call
-  `engine.apply()`. New capability = new op. No GUI-only writes.
-- **True redact.** Content is removed, not painted over. Default save is a
-  `*_redacted.pdf` copy.
-- **Page knife.** Insert, delete, rotate, extract, reorder in the sidebar or
-  as ops. Two windows can copy pages.
-- **Trackpad signatures.** Space arms, finger-on-pad inks, Enter saves SVG
-  to `~/Downloads/omapreview/signature/`. Place from the Sign tool.
-- **Omarchy-native.** Super+Space, `uwsm`-safe absolute `Exec`, live
-  `colors.toml` chrome. Fine on plain GTK too.
-
-The user-facing command is **omapreview**. The Python package is still
-`omepreview`. Forked from [omapdf](https://github.com/pbergin11/omapdf);
-omapreview is its own product.
+`omepreview read` returns text, layout, annotations, fields, and bboxes.
+Coordinates are PDF points with a top-left origin and pages are 1-based. Use a
+bbox from `read` as a precise target for an operation.
 
 ## Install
 
-Arch / Omarchy, no clone (AUR registration is closed):
+### Arch / Omarchy
+
+The visitor installer fetches the v0.1.0 release, installs its Arch
+dependencies, and adds the command and desktop entry for your user:
 
 ```bash
 curl -fsSL https://github.com/Skeptomenos/omapreview/releases/download/v0.1.0/install.sh | bash
 ```
 
-That installs pacman deps (`gtk4`, `python`, `python-gobject`, `python-cairo`,
-`python-pymupdf`), fetches the **v0.1.0** source snapshot, puts `omapreview`
-on `~/.local/bin`, and writes
-`~/.local/share/applications/omapreview.desktop`. Super+Space, type
-`omapreview`. If the menu is stale: `omarchy-refresh-applications` or
-`omarchy restart shell`.
+Then open **omapreview** from the launcher with Super+Space. The editor starts
+empty. Open a PDF with the in-app **Open PDF** button or Ctrl+O.
 
-**From a git checkout** (on omarchy-air the tree is still `~/omepreview`):
+### From a checkout
 
 ```bash
 git clone https://github.com/Skeptomenos/omapreview.git
 cd omapreview
 bash packaging/install-user.sh
-omapreview --version                  # omapreview 0.1.0
 ```
 
-The venv must be `python -m venv --system-site-packages .venv` so GTK
-`gi` stays visible. Desktop file: `share/omapreview.desktop`. Application
-ID: `org.omepreview.Editor`. Window-control override:
-`OMEPREVIEW_WINDOW_CONTROLS=1|0`.
-
-## Use
-
-### Editor
-
-1. Super+Space → **omapreview** (or `omapreview edit`) — empty desk.
-2. **Open PDF** or **Ctrl+O**, or `omapreview edit document.pdf`.
-3. Markup on the rail (select, pen, highlight, text, note, sign, stamps,
-   shapes, crop, redact). Thumbnails: F9. Search: Ctrl+F.
-4. Edits are ghosts until **Save** (Ctrl+S). Ctrl+Z undoes across saves.
-
-| Key | Action |
-|-----|--------|
-| **Ctrl+O** | Open a PDF |
-| **Ctrl+S** | Save pending ghosts through the engine |
-| **Ctrl+Z** / **Ctrl+Shift+Z** | Undo / redo (including saves) |
-| **Space** (signature pad) | Arm trackpad recording |
-| **Enter** (signature pad) | Save SVG |
-| **R** | Redact tool |
-| **F9** | Thumbnail sidebar |
-
-Sign: pick a saved SVG and drag it onto the page. Record new from that
-menu. Details: [`docs/signature-trackpad.md`](docs/signature-trackpad.md).
-
-### Command line
+For a development install, keep system GTK bindings visible:
 
 ```bash
-omapreview edit                    # empty window; Open (Ctrl+O)
+python -m venv --system-site-packages .venv
+.venv/bin/pip install -e '.[dev]'
+.venv/bin/omapreview edit
+```
+
+## Editor shortcuts
+
+| Shortcut | Action |
+| --- | --- |
+| Ctrl+O | Open a PDF |
+| Ctrl+S | Save pending ghosts through the engine |
+| Ctrl+Z / Ctrl+Shift+Z | Undo / redo, including saves |
+| Ctrl+F | Search |
+| F9 | Toggle thumbnails |
+| R | Redact tool |
+| Space / Enter (signature pad) | Arm and save a trackpad signature |
+
+## CLI
+
+```bash
 omapreview edit document.pdf
+omapreview edit document.pdf --ops proposal.json
 omapreview read document.pdf --json
-omapreview sig draw                # Space to record; Enter saves SVG
-omapreview sign document.pdf --page 2 --at 120,540 -o signed.pdf
+omapreview annotate document.pdf --page 1 --match "renewal date" -o marked.pdf
+omapreview redact document.pdf --page 1 --match "PRIVATE TOKEN" -o redacted.pdf
 omapreview pages document.pdf --list
-omapreview --version               # omapreview 0.1.0
 ```
 
-### Agents
+For a batch of mixed edits, put the operation list in JSON:
 
-Every edit is a JSON op list. Same engine as Save in the GUI. Spec:
-[`docs/ops.md`](docs/ops.md). Playbook: [`skill/SKILL.md`](skill/SKILL.md).
+```json
+[
+  {"op": "highlight", "page": 1, "match": "renewal date"},
+  {"op": "note", "page": 1, "at": [420, 180], "text": "Check this before signing."}
+]
+```
 
 ```bash
-omapreview apply document.pdf --ops edits.json -o out.pdf
-omapreview-mcp
+omepreview apply document.pdf --ops edits.json -o reviewed.pdf
 ```
 
-Consequential ops (sign, flatten, redact) default to dry-run / propose.
-The human confirms. `--ops proposal.json` on `edit` loads draggable ghosts.
+Use `--dry-run --json` when you want resolved geometry without writing an
+output. See the [operations spec](docs/ops.md) for the complete contract.
 
-## License
+## MCP
 
-[AGPL-3.0-or-later](LICENSE)
+Install the optional MCP extra, then start the server:
+
+```bash
+.venv/bin/pip install -e '.[mcp]'
+omepreview-mcp
+```
+
+The server provides broad coverage for document reads, page operations,
+markup, forms, signing, and redaction through the operations contract. Safety
+defaults depend on the entry point: dedicated MCP redaction and signature
+calls accept explicit confirmation, while generic `apply_ops` and CLI writes
+follow their own documented defaults. Use `--dry-run` or the MCP confirmation
+argument when you want a proposal first.
+
+## Project notes
+
+- User-facing command: `omapreview`. Python package: `omepreview`.
+- Desktop entry: `omapreview edit %f`; it does not open a launcher file picker.
+- Saved trackpad signatures go to `~/Downloads/omapreview/signature/`.
+- The editor, CLI, and MCP share the core PyMuPDF operation engine for supported operations.
+- The project is licensed under [AGPL-3.0-or-later](LICENSE).
+
+The screenshot fixture and asset provenance are recorded in
+[`docs/evidence/readme-redesign-2026-09-16.md`](docs/evidence/readme-redesign-2026-09-16.md).

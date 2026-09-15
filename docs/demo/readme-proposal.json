@@ -1,0 +1,18 @@
+[
+  {
+    "op": "highlight",
+    "page": 1,
+    "rect": [48, 516, 476, 540]
+  },
+  {
+    "op": "note",
+    "page": 1,
+    "at": [490, 520],
+    "text": "Keep this human checkpoint visible."
+  },
+  {
+    "op": "redact",
+    "page": 1,
+    "rect": [48, 675, 260, 692]
+  }
+]
