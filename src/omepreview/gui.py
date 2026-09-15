@@ -613,6 +613,25 @@ class Editor:
             "page_ops": copy.deepcopy(self.page_preview.page_ops),
         })
         self.redo_stack.clear()
+        self._prune_page_sources()
+
+    def _prune_page_sources(self) -> None:
+        operations = list(self.page_preview.page_ops)
+        for entry in self.undo_stack + self.redo_stack:
+            operations.extend(entry.get("page_ops", []))
+            operations.extend(entry.get("page_ops_before", []))
+        self.page_preview.prune_temp_sources({
+            str(op["source"]) for op in operations if "source" in op
+        })
+
+    def close(self) -> None:
+        """Release the document and session-owned scratch inputs."""
+        self.invalidate_view()
+        if self.doc is not None and not self.doc.is_closed:
+            self.doc.close()
+        self.undo_stack.clear()
+        self.redo_stack.clear()
+        self.page_preview.clear()
 
     def record_save(self, file_before: bytes, pending_before: list[dict], page_ops_before: list[dict]):
         """A save is an undoable step too: undoing it reverts the file and
@@ -625,6 +644,7 @@ class Editor:
             "page_ops_before": page_ops_before,
         })
         self.redo_stack.clear()
+        self._prune_page_sources()
 
     def _restore_file(self, data: bytes):
         """Restore a saved byte snapshot without truncating the live file."""
@@ -701,6 +721,7 @@ class Editor:
                 "pending": pending_before,
                 "page_ops": page_ops_before,
             })
+            self._prune_page_sources()
             return False
         file_before = Path(self.path).read_bytes()
         pending_before = copy.deepcopy(self.pending)
@@ -722,6 +743,7 @@ class Editor:
             raise
         self.undo_stack.pop()
         self.redo_stack.append(entry)
+        self._prune_page_sources()
         return True
 
     def redo(self) -> bool:
@@ -746,6 +768,7 @@ class Editor:
                 "pending": pending_before,
                 "page_ops": page_ops_before,
             })
+            self._prune_page_sources()
             return False
         file_before = Path(self.path).read_bytes()
         pending_before = copy.deepcopy(self.pending)
@@ -753,7 +776,7 @@ class Editor:
         try:
             self._restore_file(entry["file_after"])
             self.pending = []
-            self.page_preview.clear()
+            self.page_preview.clear(preserve_temp_sources=True)
             preview = self.page_preview.rebuild()
             preview.close()
             self.invalidate_view()
@@ -770,6 +793,7 @@ class Editor:
             raise
         self.redo_stack.pop()
         self.undo_stack.append(entry)
+        self._prune_page_sources()
         return True
 
     def adopt_document(self, path: str) -> None:
@@ -860,6 +884,7 @@ class Editor:
             raise
 
         old_doc, old_preview = self.doc, self.page_preview
+        new_preview.take_temp_sources_from(old_preview)
         self.doc = new_doc
         self.path = str(target)
         # The sidebar captures this object for its lifetime. Transfer the
@@ -878,6 +903,7 @@ class Editor:
             self.invalidate_view()
             old_doc.close()
             new_preview.clear()
+            self._prune_page_sources()
         except Exception:
             pass
         return {
@@ -3832,7 +3858,8 @@ def run(pdf: str | None = None, ops_file: str | None = None) -> int:
                 n_pages = ed.page_count()
                 if n_pages:
                     ed.page_no = min(ed.page_no, n_pages - 1)
-                ed.page_preview.clear()
+                ed.page_preview.clear(preserve_temp_sources=True)
+                ed._prune_page_sources()
                 render_page()
                 if ed.pending or ed.page_preview.has_changes():
                     toast("Changed on disk — view refreshed; your unsaved items are kept")
@@ -3885,7 +3912,10 @@ def run(pdf: str | None = None, ops_file: str | None = None) -> int:
         GLib.idle_add(initial_render)
 
     app.connect("activate", on_activate)
-    app.run(None)
+    try:
+        app.run(None)
+    finally:
+        ed.close()
     return 0
 
 

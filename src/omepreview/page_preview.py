@@ -154,11 +154,12 @@ class PagePreviewState:
     def has_changes(self) -> bool:
         return bool(self.page_ops)
 
-    def clear(self):
+    def clear(self, *, preserve_temp_sources: bool = False):
         self.page_ops.clear()
         self._drop_scratch()
         self.inserted_pages.clear()
-        self._drop_temp_sources()
+        if not preserve_temp_sources:
+            self._drop_temp_sources()
         if self.source and os.path.isfile(self.source):
             self._original_count = _pdf_page_count(self.source)
         elif not self.source:
@@ -174,6 +175,26 @@ class PagePreviewState:
             path.unlink(missing_ok=True)
         self._temp_sources.clear()
 
+    def take_temp_sources_from(self, other: PagePreviewState) -> None:
+        """Transfer owned inputs when a prepared preview replaces its state."""
+        self._temp_sources.extend(other._temp_sources)
+        other._temp_sources.clear()
+
+    def prune_temp_sources(self, referenced: set[str]) -> None:
+        """Remove only owned inputs no longer used by edits or history."""
+        kept = []
+        for path in self._temp_sources:
+            if str(path) in referenced:
+                kept.append(path)
+                continue
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                # Cleanup must not turn a committed history step into a
+                # retryable failure. Keep ownership so cleanup can retry.
+                kept.append(path)
+        self._temp_sources = kept
+
     def _remember_source(self, path: str | Path) -> str:
         p = Path(path)
         self._temp_sources.append(p)
@@ -185,6 +206,9 @@ class PagePreviewState:
         self.inserted_pages.clear()
         if not self.source:
             return pymupdf.open()
+        # Undo can restore a different on-disk page count while retaining
+        # pending insertions. Identities must start from that restored base.
+        self._original_count = _pdf_page_count(self.source)
         if not self.page_ops:
             return pymupdf.open(self.source)
         fd, path = tempfile.mkstemp(suffix=".pdf", dir=str(scratch_dir()))

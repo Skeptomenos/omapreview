@@ -29,6 +29,145 @@ def file_mode(path: Path) -> int:
     return stat.S_IMODE(os.stat(path).st_mode)
 
 
+@pytest.mark.parametrize("failed_save", [None, "apply", "handoff"])
+def test_pasted_source_survives_save_history_and_sidebar_edit(tmp_path, monkeypatch, failed_save):
+    from omepreview import gui
+
+    source = make_pdf(tmp_path / "document.pdf")
+    pasted = make_pdf(tmp_path / "clipboard.pdf", pages=1)
+    with pymupdf.open(pasted) as doc:
+        doc[0].insert_text((72, 100), "PASTED PAGE")
+        doc.saveIncr()
+    original = source.read_bytes()
+    editor = gui.Editor(str(source), None)
+    sidebar = editor.page_preview
+    editor.checkpoint()
+    sidebar.add_insert_pdf(1, str(pasted), retain_source=True)
+    if failed_save:
+        with monkeypatch.context() as patch:
+            def fail(*args, **kwargs):
+                raise OSError("save failed")
+            if failed_save == "apply":
+                patch.setattr(engine, "apply", fail)
+            else:
+                patch.setattr(gui, "PagePreviewState", fail)
+            with pytest.raises(OSError, match="save failed"):
+                editor.save_pending()
+        assert source.read_bytes() == original
+        assert pasted.exists()
+        assert sidebar.page_ops
+    try:
+        editor.save_pending()
+        saved = source.read_bytes()
+        assert pasted.exists()
+        for _ in range(2):
+            assert editor.undo()
+            assert source.read_bytes() == original
+            assert editor.page_count() == 3
+            assert "PASTED PAGE" in editor.page_doc()[1].get_text()
+            assert sidebar._original_count == 2
+            assert len(sidebar.identities()) == editor.page_count()
+            assert pasted.exists()
+            assert editor.redo()
+            assert source.read_bytes() == saved
+            assert pasted.exists()
+        editor.checkpoint()
+        sidebar.add_rotate_pages([2], 90)
+        editor.save_pending()
+        with pymupdf.open(source) as doc:
+            assert doc.page_count == 3
+            assert doc[1].rotation == 90
+            assert "PASTED PAGE" in doc[1].get_text()
+        assert editor.undo()  # second Save
+        assert source.read_bytes() == saved
+        assert not editor.undo()  # rotation
+        assert editor.undo()  # pasted Save, still needs clipboard source
+        assert source.read_bytes() == original
+        assert editor.page_count() == 3
+        assert len(sidebar.identities()) == editor.page_count()
+        assert pasted.exists()
+        assert editor.page_preview is sidebar
+    finally:
+        editor.close()
+    assert not pasted.exists()
+
+
+def test_pasted_source_cleanup_after_history_is_discarded(tmp_path):
+    from omepreview.gui import Editor
+
+    source = make_pdf(tmp_path / "document.pdf")
+    pasted = make_pdf(tmp_path / "clipboard.pdf", pages=1)
+    user_file = make_pdf(tmp_path / "user.pdf", pages=1)
+    editor = Editor(str(source), None)
+    try:
+        editor.checkpoint()
+        editor.page_preview.add_insert_pdf(1, str(pasted), retain_source=True)
+        assert not editor.undo()  # paste now belongs only to Redo
+        assert pasted.exists()
+        editor.checkpoint()  # new edit discards Redo
+        assert not pasted.exists()
+        editor.page_preview.add_insert_pdf(1, str(user_file))
+        editor.save_pending()
+        editor.open_path(str(source))
+        assert user_file.exists()  # caller-owned paths are never removed
+    finally:
+        editor.invalidate_view()
+        editor.doc.close()
+        editor.page_preview.clear()
+
+
+@pytest.mark.parametrize("cleanup", ["open", "close"])
+def test_saved_paste_sources_cleaned_when_session_is_replaced(tmp_path, cleanup):
+    from omepreview.gui import Editor
+
+    source = make_pdf(tmp_path / "document.pdf")
+    pasted = make_pdf(tmp_path / "clipboard.pdf", pages=1)
+    editor = Editor(str(source), None)
+    try:
+        editor.page_preview.add_insert_pdf(1, str(pasted), retain_source=True)
+        editor.save_pending()
+        assert pasted.exists()
+        if cleanup == "open":
+            editor.open_path(str(source))
+        else:
+            editor.close()
+        assert not pasted.exists()
+    finally:
+        editor.close()
+
+
+def test_failed_redo_keeps_pasted_source_for_retry(tmp_path, monkeypatch):
+    from omepreview.gui import Editor
+
+    source = make_pdf(tmp_path / "document.pdf")
+    pasted = make_pdf(tmp_path / "clipboard.pdf", pages=1)
+    editor = Editor(str(source), None)
+    try:
+        editor.page_preview.add_insert_pdf(1, str(pasted), retain_source=True)
+        editor.save_pending()
+        saved = source.read_bytes()
+        editor.undo()
+        before_redo = source.read_bytes()
+        real_rebuild = editor.page_preview.rebuild
+        def fail_after_clear():
+            if not editor.page_preview.page_ops:
+                raise OSError("redo rebuild failed")
+            return real_rebuild()
+        with monkeypatch.context() as patch:
+            patch.setattr(editor.page_preview, "rebuild", fail_after_clear)
+            with pytest.raises(OSError, match="redo rebuild failed"):
+                editor.redo()
+        assert source.read_bytes() == before_redo
+        assert pasted.exists()
+        assert editor.page_count() == 3
+        assert editor.redo()
+        assert source.read_bytes() == saved
+        assert editor.undo()
+        assert editor.page_count() == 3
+    finally:
+        editor.close()
+
+
 @pytest.mark.parametrize("copy_save", [False, True])
 def test_sidebar_preview_binding_survives_save_and_copy_retarget(tmp_path, copy_save):
     from omepreview.gui import Editor
