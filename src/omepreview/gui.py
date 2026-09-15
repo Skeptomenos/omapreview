@@ -846,7 +846,12 @@ class Editor:
         old_doc, old_preview = self.doc, self.page_preview
         self.doc = new_doc
         self.path = str(target)
-        self.page_preview = new_preview
+        # The sidebar captures this object for its lifetime. Transfer the
+        # prepared state without replacing that shared object; keep retired
+        # scratch resources on the temporary object for cleanup below.
+        old_preview.__dict__, new_preview.__dict__ = (
+            new_preview.__dict__, old_preview.__dict__
+        )
         self.undo_stack = history
         self.redo_stack.clear()
         self.pending.clear()
@@ -856,7 +861,7 @@ class Editor:
         try:
             self.invalidate_view()
             old_doc.close()
-            old_preview.clear()
+            new_preview.clear()
         except Exception:
             pass
         return {

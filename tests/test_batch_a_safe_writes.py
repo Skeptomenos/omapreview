@@ -29,6 +29,39 @@ def file_mode(path: Path) -> int:
     return stat.S_IMODE(os.stat(path).st_mode)
 
 
+@pytest.mark.parametrize("copy_save", [False, True])
+def test_sidebar_preview_binding_survives_save_and_copy_retarget(tmp_path, copy_save):
+    from omepreview.gui import Editor
+
+    source = make_pdf(tmp_path / "source.pdf")
+    before = source.read_bytes()
+    editor = Editor(str(source), None)
+    # build_page_sidebar captures this reference in its action callbacks.
+    sidebar_preview = editor.page_preview
+    editor.pending.append({"kind": "note", "page": 0, "x": 100, "y": 100, "text": "first"})
+    if copy_save:
+        editor.pending.append({"kind": "redact", "page": 0, "x0": 300, "y0": 300, "x1": 350, "y1": 350})
+    try:
+        editor.save_pending()
+        target = Path(editor.path)
+        assert editor.page_preview is sidebar_preview
+        assert sidebar_preview.source == str(target)
+        assert (target != source) == copy_save
+        sidebar_preview.add_rotate_pages([1], 90)
+        assert editor.page_preview.page_ops
+        editor.save_pending()
+        with pymupdf.open(target) as saved:
+            assert saved[0].rotation == 90
+            assert sum(a.type[1] == "Text" for a in saved[0].annots()) == 1
+        assert editor.page_preview is sidebar_preview
+        assert not sidebar_preview.page_ops
+        if copy_save:
+            assert source.read_bytes() == before
+    finally:
+        editor.invalidate_view()
+        editor.doc.close()
+
+
 @pytest.mark.parametrize("failure", ["reopen", "preview", "history"])
 def test_save_handoff_failure_rolls_back_and_retry_applies_once(tmp_path, monkeypatch, failure):
     from omepreview import gui
