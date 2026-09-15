@@ -29,6 +29,72 @@ def file_mode(path: Path) -> int:
     return stat.S_IMODE(os.stat(path).st_mode)
 
 
+@pytest.mark.parametrize("failure", ["reopen", "preview", "history"])
+def test_save_handoff_failure_rolls_back_and_retry_applies_once(tmp_path, monkeypatch, failure):
+    from omepreview import gui
+
+    source = make_pdf(tmp_path / "source.pdf")
+    editor = gui.Editor(str(source), None)
+    editor.page_preview.add_rotate_pages([1], 90)
+    editor.pending.append({"kind": "note", "page": 0, "x": 100, "y": 100, "text": "once"})
+    before = source.read_bytes()
+    old_doc, old_preview = editor.doc, editor.page_preview
+    pending = copy.deepcopy(editor.pending)
+    try:
+        with monkeypatch.context() as patch:
+            if failure == "reopen":
+                real_open = gui.pymupdf.open
+                calls = 0
+
+                def open_once(*args, **kwargs):
+                    nonlocal calls
+                    if args and str(args[0]) == str(source):
+                        calls += 1
+                        if calls == 2:
+                            raise OSError("handoff failure")
+                    return real_open(*args, **kwargs)
+
+                patch.setattr(gui.pymupdf, "open", open_once)
+            elif failure == "preview":
+                def fail_preview(*args, **kwargs):
+                    raise OSError("handoff failure")
+                patch.setattr(gui, "PagePreviewState", fail_preview)
+            else:
+                real_read = Path.read_bytes
+                reads = 0
+
+                def read_once(path):
+                    nonlocal reads
+                    if path == source:
+                        reads += 1
+                        if reads == 2:
+                            raise OSError("handoff failure")
+                    return real_read(path)
+
+                patch.setattr(Path, "read_bytes", read_once)
+            with pytest.raises(OSError, match="handoff failure"):
+                editor.save_pending()
+        assert source.read_bytes() == before
+        assert editor.doc is old_doc and not old_doc.is_closed
+        assert editor.page_preview is old_preview
+        assert editor.pending == pending
+        assert editor.undo_stack == editor.redo_stack == []
+        assert editor.page().rotation == 90
+        editor.save_pending()
+        with pymupdf.open(source) as saved:
+            assert saved[0].rotation == 90
+            assert len(list(saved[0].annots())) == 1
+        assert not editor.pending and not editor.page_preview.page_ops
+        assert len(editor.undo_stack) == 1
+        editor.undo()
+        assert source.read_bytes() == before
+        editor.redo()
+        assert editor.doc[0].rotation == 90
+    finally:
+        editor.invalidate_view()
+        editor.doc.close()
+
+
 def test_apply_failure_preserves_source_and_existing_output(tmp_path, monkeypatch):
     source = make_pdf(tmp_path / "source.pdf")
     output = tmp_path / "output.pdf"
@@ -52,6 +118,34 @@ def test_apply_failure_preserves_source_and_existing_output(tmp_path, monkeypatc
     assert source.read_bytes() == before
     assert output.read_bytes() == sentinel
     assert not list(tmp_path.glob(".output.pdf.*.tmp"))
+
+
+def test_copy_save_handoff_failure_removes_copy_and_keeps_editor(tmp_path, monkeypatch):
+    from omepreview import gui
+
+    source = make_pdf(tmp_path / "source.pdf")
+    editor = gui.Editor(str(source), None)
+    editor.pending.append({"kind": "redact", "page": 0, "x0": 300, "y0": 300, "x1": 350, "y1": 350})
+    before = source.read_bytes()
+    old_preview = editor.page_preview
+    try:
+        with monkeypatch.context() as patch:
+            def fail_preview(*args, **kwargs):
+                raise OSError("copy handoff failure")
+            patch.setattr(gui, "PagePreviewState", fail_preview)
+            with pytest.raises(OSError, match="copy handoff failure"):
+                editor.save_pending()
+        assert source.read_bytes() == before
+        assert not (tmp_path / "source_redacted.pdf").exists()
+        assert editor.has_document() and editor.path == str(source)
+        assert editor.page_preview is old_preview and editor.pending
+        assert editor.undo_stack == []
+        result = editor.save_pending()
+        assert Path(result["path"]).is_file()
+        assert source.read_bytes() == before
+        assert len(editor.undo_stack) == 1 and not editor.pending
+    finally:
+        editor.doc.close()
 
 
 def test_publish_failure_preserves_existing_output(tmp_path, monkeypatch):

@@ -819,18 +819,46 @@ class Editor:
             # untouched: it may belong to a concurrent actor rather than to
             # this failed save attempt.
             raise
-        if created_copy is not None:
-            self.adopt_document(str(created_copy))
-        else:
-            if self.doc is not None and not self.doc.is_closed:
-                self.doc.close()
-            self.doc = pymupdf.open(self.path)
-            self.invalidate_view()
-            self.page_preview.clear()
-        self.record_save(file_before, pending_before, page_ops_before)
+        new_doc = None
+        try:
+            # Keep the live editor and its scratch inputs intact until every
+            # fallible part of the handoff has succeeded.
+            new_doc = pymupdf.open(str(target))
+            new_preview = PagePreviewState(target)
+            new_preview.on_identities_changed = self._rebind_pending_pages
+            history = self.undo_stack + [{
+                "kind": "save",
+                "file_before": file_before,
+                "file_after": target.read_bytes(),
+                "pending_before": pending_before,
+                "page_ops_before": page_ops_before,
+            }]
+            page_no = min(self.page_no, new_doc.page_count - 1)
+        except BaseException:
+            if new_doc is not None:
+                new_doc.close()
+            if created_copy is None:
+                atomic_write_private(source, file_before)
+            else:
+                created_copy.unlink(missing_ok=True)
+            raise
+
+        old_doc, old_preview = self.doc, self.page_preview
+        self.doc = new_doc
+        self.path = str(target)
+        self.page_preview = new_preview
+        self.undo_stack = history
+        self.redo_stack.clear()
         self.pending.clear()
         self.selected = None
-        self.page_no = min(self.page_no, self.page_count() - 1)
+        self.page_no = page_no
+        # Cleanup cannot turn a committed Save into a retryable failure.
+        try:
+            self.invalidate_view()
+            old_doc.close()
+            old_preview.clear()
+        except Exception:
+            pass
         return {
             "path": self.path,
             "redacted_copy": str(created_copy) if created_copy else None,
