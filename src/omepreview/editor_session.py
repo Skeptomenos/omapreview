@@ -156,7 +156,9 @@ def request(session, payload):
             response = _receive(conn)
     except (OSError, ValueError) as exc:
         raise OpError(f"editor session unavailable or timed out: {session}; list sessions and inspect status before retrying") from exc
-    if "error" in response:
+    # The protocol error is a single-field envelope. OCR task records also
+    # carry an error field, including None for successful tasks.
+    if isinstance(response, dict) and set(response) == {"error"}:
         raise OpError(response["error"])
     return response
 
