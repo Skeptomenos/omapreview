@@ -397,7 +397,13 @@ Continue at `next_offset` until null, using the same source fingerprint. One
 rect/quad is a matched text fragment; a dehyphenated match can span fragments.
 Coordinates stay in unrotated CropBox-local points on rotated/cropped pages.
 
-The recorder requires a graphical session and GTK. States are `starting`,
+The recorder requires a graphical session and GTK. It records the reviewed
+signature identity at start. Publication compares that path/hash under the shared
+library writer lock. If another writer creates or changes the name while drawing,
+the recorder refuses to replace it. Inspect the new asset and start again with
+current authorization, or choose another name. Startup process identity is stored
+separately from worker status; death before the first worker update is reported
+as failure. Startup has a 15-second deadline. States are `starting`,
 `awaiting_human`, `saved`, `cancelled`, and `failed`. `cancel` can return
 `cancellation_requested`; poll until terminal. A crashed worker is reported as
 failed when detectable. An uncertain process outcome requires library inspection
@@ -414,7 +420,10 @@ PDF pages remain 1-based. `replace` takes one markup operation and replaces the
 chosen pending item (match-based markup may resolve to several ghosts).
 `pending` preserves ghost order, including deletion runs; Save alone uses the
 engine's safe execution order. `selected_index` refers to that pending list.
-`move` rejects fixed widget/annotation targets. Use `replace` to retarget them.
+Replacement stays at the selected slot, including expanded match hits, so later
+field writes and overlapping marks retain their order. Crop uses the same pending
+coordinate rebasing as the native editor; a failed crop retains pending/history
+and imported sources. `move` rejects fixed widget/annotation targets. Use `replace` to retarget them.
 `stage` accepts a markup batch or one page operation. `extract_pages` uses the
 existing file export operation. Proposal opening accepts the GUI's markup ops;
 stage page operations after opening. Imported page sources use retained copies.
@@ -431,7 +440,9 @@ have the routes above.
 Export workflows operate on saved PDF bytes. Save pending edits first. `copy`,
 `zip`, `flatten`, and `zip-clipboard` require a new output; existing files and
 symlinks are refused. Publication is private and does not overwrite a racing
-file. `flatten` uses the shared engine and its pending-redaction refusal.
+file. `flatten` uses a private snapshot of the fingerprinted source through the shared
+engine and its pending-redaction refusal. A concurrent source replacement cannot
+change the bytes that the reported fingerprint identifies.
 Email, LocalSend, folder, and clipboard actions require `confirm=true`.
 Email opens a composer; LocalSend opens its app. A PID or successful helper exit
 never proves delivery. Validation uses isolated mock helpers, never recipients.

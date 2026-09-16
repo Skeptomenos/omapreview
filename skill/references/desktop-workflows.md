@@ -42,7 +42,8 @@ real GTK state and ends with the process; it is not persistent document history.
 Use `signatures` to inspect/import existing authorized SVG/PNG files. To draw,
 call `record_signature` with `{"action":"start","name":"initials","click":true}`
 (mouse) or omit click for the trackpad recorder. Existing names require explicit
-replacement confirmation. Tell the human to draw and press Enter, or Escape to
+replacement confirmation. If the stored asset changes while drawing, publication
+refuses the conflict; inspect the asset before a new attempt. Tell the human to draw and press Enter, or Escape to
 cancel. Poll `{"action":"status","job":"RETURNED_ID"}`. Only `saved:true` with
 a saved path/hash completes recording. `cancel` requests cancellation; wait for
 `cancelled`. For failed/uncertain jobs inspect the library before retry. No
