@@ -53,6 +53,15 @@ compiled UI code. This directory holds its design notes.
 - **Page preview inputs**: PDF and image pages are copied into private session
   storage when inserted. Later changes or removal of the picked file cannot
   change the pending Save.
+- **OCR copy**: Recognize text discovers dependencies and preflights the chosen
+  pages off the GTK loop. Approval binds the saved source hash and a new copy
+  path. One editor-local worker calls `engine.apply` with phase progress and
+  cancellation. The bridge returns a task ID quickly; status and cancel read
+  cached state. The editor opens a verified copy automatically only when it
+  recognized text, its revision still matches approval, and no undo history
+  would be cleared. Otherwise it keeps the current document and offers Open copy.
+  Close requests cancel and wait for the worker to stop. OCR is available only
+  from current source with the optional extra, not published v0.1.1.
 - **Comments**: clicking near a saved annotation (select tool) pops its
   content — values are copied out of the PyMuPDF annot objects inside the
   iteration loop (they can go stale), and the popover opens via
