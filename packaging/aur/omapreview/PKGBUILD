@@ -1,7 +1,7 @@
 # Maintainer: David Hapunkt <Skeptomenos@users.noreply.github.com>
 pkgname=omapreview
 pkgver=0.1.1
-pkgrel=1
+pkgrel=2
 pkgdesc="Preview-style PDF viewer and reviewer for Linux"
 arch=('any')
 url="https://github.com/Skeptomenos/omapreview"
@@ -14,7 +14,7 @@ optdepends=(
 makedepends=('python-build' 'python-installer' 'python-hatchling' 'python-wheel')
 # Deterministic application source asset; extracts to omapreview-$pkgver.
 source=("$pkgname-$pkgver-src.tar.gz::https://github.com/Skeptomenos/omapreview/releases/download/v$pkgver/omapreview-$pkgver-src.tar.gz")
-sha256sums=('f75aa55b4edd85ecde36401c223d54b7e421af9905ea125da36b483d1f488c12')
+sha256sums=('6f0c985d05915d14e034db18f40175998e8d53f4d1cab26d6e7a2b52f2f2436a')
 
 build() {
   cd "$pkgname-$pkgver"
