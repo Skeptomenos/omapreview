@@ -211,6 +211,11 @@ def intersecting_payloads(page: pymupdf.Page, rects: list) -> list[str]:
 # of its bbox area is covered — neighbors that merely clip the edge do not.
 _SUBSTANTIALLY_INSIDE = 0.5
 _REMNANT_SNIPPET = 48
+# OCR word boxes can end on the last fully-covered pixel while the scanned
+# glyph has a faint antialiased fringe just outside that box. Keep this
+# margin small, and cap it at half the gap to another glyph so a nearby
+# control word is never swept into a text-snap redaction.
+_IMAGE_EDGE_MARGIN = 0.75
 
 
 def _iter_glyphs(page: pymupdf.Page):
@@ -261,18 +266,46 @@ def expand_rects_to_glyphs(page: pymupdf.Page, rects: list) -> list[pymupdf.Rect
     """Grow each authorized rect to the ink of glyphs already inside it.
 
     Undersized word-snap boxes miss descenders; union with those glyph bboxes
-    so apply_redactions covers the ink. Does not grow to neighbors that only
-    graze the edge (coverage below ``_SUBSTANTIALLY_INSIDE``). Keeps the
-    original rect when no glyphs qualify so image-only regions still apply.
+    so apply_redactions covers the ink. Image-backed pages also get a small,
+    gap-capped margin for antialiased scan fringes. Does not grow to neighbors
+    that only graze the edge (coverage below ``_SUBSTANTIALLY_INSIDE``).
+    Keeps the original rect when no glyphs qualify so image-only regions still
+    apply.
     """
     glyphs = [(ch, rect) for ch, rect in _iter_glyphs(page) if ch.strip()]
+    image_backed = bool(page.get_images(full=True))
     expanded: list[pymupdf.Rect] = []
     for rect in rects:
         clip = _as_rect(rect)
         union = pymupdf.Rect(clip)
+        selected: list[pymupdf.Rect] = []
         for _ch, glyph in glyphs:
             if _inside_fraction(glyph, clip) >= _SUBSTANTIALLY_INSIDE:
                 union |= glyph
+                selected.append(glyph)
+        if image_backed and selected:
+            # Limit each edge independently by the nearest other glyph whose
+            # bbox overlaps that edge's perpendicular span.
+            margin = [_IMAGE_EDGE_MARGIN] * 4
+            for _ch, glyph in glyphs:
+                if glyph in selected:
+                    continue
+                if glyph.y1 > union.y0 and glyph.y0 < union.y1:
+                    if glyph.x1 <= union.x0:
+                        margin[0] = min(margin[0], (union.x0 - glyph.x1) / 2)
+                    elif glyph.x0 >= union.x1:
+                        margin[2] = min(margin[2], (glyph.x0 - union.x1) / 2)
+                if glyph.x1 > union.x0 and glyph.x0 < union.x1:
+                    if glyph.y1 <= union.y0:
+                        margin[1] = min(margin[1], (union.y0 - glyph.y1) / 2)
+                    elif glyph.y0 >= union.y1:
+                        margin[3] = min(margin[3], (glyph.y0 - union.y1) / 2)
+            union = pymupdf.Rect(
+                union.x0 - margin[0],
+                union.y0 - margin[1],
+                union.x1 + margin[2],
+                union.y1 + margin[3],
+            )
         expanded.append(union)
     return expanded
 
