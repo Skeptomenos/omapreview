@@ -16,7 +16,7 @@ Files:
 
 Source is the deterministic GitHub release asset, not a clone of Skeptomenos/omapreview:
 
-`https://github.com/Skeptomenos/omapreview/releases/download/v0.1.1/omapreview-0.1.1-src.tar.gz`
+`https://github.com/Skeptomenos/omapreview/releases/download/v0.2.0/omapreview-0.2.0-src.tar.gz`
 
 The SHA-256 pin is kept in both PKGBUILDs and `.SRCINFO` after the release
 asset is built from the final tag.
@@ -30,7 +30,7 @@ cp /path/to/app/packaging/PKGBUILD .
 # or: cp /path/to/app/packaging/aur/omapreview/PKGBUILD .
 makepkg --printsrcinfo > .SRCINFO
 git add PKGBUILD .SRCINFO
-git commit -m "omapreview 0.1.1"
+git commit -m "omapreview 0.2.0"
 git push origin master
 ```
 

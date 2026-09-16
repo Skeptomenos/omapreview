@@ -1,7 +1,7 @@
 pkgbase = omapreview
 	pkgdesc = Preview-style PDF viewer and reviewer for Linux
-	pkgver = 0.1.1
-	pkgrel = 2
+	pkgver = 0.2.0
+	pkgrel = 1
 	url = https://github.com/Skeptomenos/omapreview
 	arch = any
 	license = AGPL-3.0-or-later
@@ -15,11 +15,11 @@ pkgbase = omapreview
 	depends = python-gobject
 	depends = python-cairo
 	optdepends = python-mcp>=2.2.0: MCP server for AI agents (omapreview-mcp)
-	optdepends = tesseract: OCR recognition engine for a future OCR-enabled release
-	optdepends = tesseract-data-eng: English OCR language data for a future OCR-enabled release
-	optdepends = ghostscript: PDF rasterizer for a future OCR-enabled release
+	optdepends = tesseract: OCR recognition engine (enable the optional Python OCR backend separately)
+	optdepends = tesseract-data-eng: English OCR language data
+	optdepends = ghostscript: PDF rasterizer for OCR
 	optdepends = omarchy: bar widget and menu-based PDF picker
-	source = omapreview-0.1.1-src.tar.gz::https://github.com/Skeptomenos/omapreview/releases/download/v0.1.1/omapreview-0.1.1-src.tar.gz
+	source = omapreview-0.2.0-src.tar.gz::https://github.com/Skeptomenos/omapreview/releases/download/v0.2.0/omapreview-0.2.0-src.tar.gz
 	sha256sums = 6f0c985d05915d14e034db18f40175998e8d53f4d1cab26d6e7a2b52f2f2436a
 
 pkgname = omapreview

@@ -10,6 +10,9 @@ omapreview is a focused GTK4 workspace for reading, annotating, signing,
 redacting, and rearranging PDFs. It is built for Omarchy and works on plain
 GTK Linux too.
 
+**New in 0.2.0:** searchable scans with optional OCR, richer CLI/MCP workflows,
+and verified OCR redaction. [Read the changelog](CHANGELOG.md).
+
 <p align="center">
   <img src="docs/assets/readme-hills.jpg" alt="Layered blue hills on warm paper" width="760" />
 </p>
@@ -58,11 +61,11 @@ bbox from `read` as a precise target for an operation.
 
 ### Arch / Omarchy
 
-The visitor installer fetches the v0.1.1 release, installs its Arch
+The visitor installer fetches the v0.2.0 release, installs its Arch
 dependencies, and adds the command and desktop entry for your user:
 
 ```bash
-curl -fsSL https://github.com/Skeptomenos/omapreview/releases/download/v0.1.1/install.sh | bash
+curl -fsSL https://github.com/Skeptomenos/omapreview/releases/download/v0.2.0/install.sh | bash
 ```
 
 Then open **omapreview** from the launcher with Super+Space. The editor starts
@@ -84,41 +87,36 @@ python -m venv --system-site-packages .venv
 .venv/bin/omapreview edit
 ```
 
-### Optional OCR setup from current source
+### Optional OCR and MCP
 
-The published v0.1.1 installer and Arch source asset have no OCR action. The
-following setup is for current source. In a checkout venv,
-run `.venv/bin/pip install -e '.[ocr]'` (or `'.[ocr,mcp]'` for both) to keep an
-existing user installation unchanged. To update the user command and desktop
-entry from that checkout, enable OCR, MCP, or both with the installer:
+Enable OCR, MCP, or both during installation:
 
 ```bash
-bash packaging/install-user.sh --with-ocr
-# or: bash packaging/install-user.sh --with-mcp
-# or: bash packaging/install-user.sh --with-ocr --with-mcp
+curl -fsSL https://github.com/Skeptomenos/omapreview/releases/download/v0.2.0/install.sh | bash -s -- --with-ocr --with-mcp
 ```
 
-The checkout installer writes `~/.local/bin/omapreview` and the user desktop
-entry, so it replaces those links if they already exist. The OCR extra installs
-OCRmyPDF `>=17.11.0,<17.12`; only 17.11.0 is validated on Linux aarch64 with
-Python 3.14.7. Basic GUI and CLI installation does not require OCR. MCP is a
-separate extra.
+Use only `--with-ocr` or `--with-mcp` if you need one extra. The basic install
+includes the GUI and CLI. OCR and MCP remain optional. For a checkout, use
+`bash packaging/install-user.sh --with-ocr --with-mcp`.
 
-OCR also needs Tesseract, installed language data and a PDF rasterizer. On
-Arch / Omarchy, check the available packages with
-`pacman -Si tesseract tesseract-data-eng ghostscript`, then install any missing
-packages yourself. For another language, choose its matching
-`tesseract-data-<code>` package. No installer downloads language data or runs
-privileged OCR setup. List the languages actually available to Tesseract with
-`tesseract --list-langs`. Check the backend version with
-`.venv/bin/python -c 'from importlib.metadata import version; print(version("ocrmypdf"))'`.
-If a tool or language is missing, install it and rerun these checks before OCR.
+OCR uses OCRmyPDF 17.11.x with Tesseract and Ghostscript. Install the system
+OCR tools and the languages you need before enabling recognition. On Arch:
 
-The Arch package definitions keep the v0.1.1 source URL and checksum. They
-list the system OCR tools as optional guidance for a future OCR release; they
-do not install OCRmyPDF or enable OCR in v0.1.1.
+```bash
+sudo pacman -S --needed tesseract tesseract-data-eng ghostscript
+tesseract --list-langs
+```
 
-### Recognize text in the current-source editor
+Choose a matching `tesseract-data-<code>` package for another language. The
+installer does not download OCR language data or perform privileged OCR setup.
+Check available recognition support with `omapreview ocr-status`.
+OCRmyPDF 17.11.0 is validated on Linux aarch64 with Python 3.14.7.
+
+The Arch package recipes include the application and list the system OCR tools
+as optional dependencies. For an installation that manages the supported
+Python OCR backend too, use the visitor installer with `--with-ocr`.
+
+### Recognize scanned text
 
 Open a PDF, then choose **Recognize text** in the editor rail or press
 Ctrl+Shift+O. Choose pages, installed OCR languages, and a new PDF path.
@@ -131,8 +129,9 @@ edits before starting or opening the copy.
 
 The original is kept. Search the copy and review recognized text against the
 page image. OCR reports pages it skipped or could not recognize; it does not
-certify transcription accuracy. This editor action is in current source and
-is absent from the published v0.1.1 release.
+certify transcription accuracy. You can then search, highlight or redact the
+recognized text. Redaction removes both the hidden text and the selected scan
+pixels; inspect the saved copy to verify the result.
 
 ## Make omapreview your default PDF editor
 
@@ -160,7 +159,7 @@ default unchanged until you choose to change it.
 | Ctrl+S | Save pending ghosts through the engine |
 | Ctrl+Z / Ctrl+Shift+Z | Undo / redo, including saves |
 | Ctrl+F | Search |
-| Ctrl+Shift+O | Recognize text in a new copy (current source) |
+| Ctrl+Shift+O | Recognize text in a new copy |
 | F9 | Toggle thumbnails |
 | R | Redact tool |
 | Space / Enter (signature pad) | Arm and save a trackpad signature |
@@ -172,7 +171,7 @@ omapreview edit document.pdf
 omapreview edit document.pdf --ops proposal.json
 omapreview read document.pdf --json
 omapreview annotate document.pdf --page 1 --match "renewal date" -o marked.pdf
-omapreview redact document.pdf --page 1 --match "PRIVATE TOKEN" -o redacted.pdf
+omapreview redact document.pdf --page 1 --match "PRIVATE TOKEN" -o redacted.pdf --confirm
 omapreview pages document.pdf --list
 ```
 
@@ -189,8 +188,10 @@ For a batch of mixed edits, put the operation list in JSON:
 omapreview apply document.pdf --ops edits.json -o reviewed.pdf
 ```
 
-Use `--dry-run --json` when you want resolved geometry without writing an
-output. See the [operations spec](docs/ops.md) for the complete contract.
+Use `--dry-run --json` to inspect resolved geometry without writing an output.
+Signing, redaction and deletion require `--confirm`; review the proposal first.
+After a write, read the saved file and use `omapreview snapshot` to inspect its
+appearance. See the [operations spec](docs/ops.md) for the complete contract.
 
 ## MCP
 
@@ -200,7 +201,7 @@ The Arch package installs both in `/usr/bin`. No shell setup files are changed.
 If your terminal cannot find the command, use `~/.local/bin/omapreview`, or run
 `export PATH="$HOME/.local/bin:$PATH"` for the current shell.
 
-MCP is optional. After the release installer, enable it without a checkout:
+MCP is optional. Add `--with-mcp` to the installer, or enable it later without a checkout:
 
 ```bash
 ~/.local/share/omapreview/venv/bin/python -m pip install 'mcp>=2.2.0'
@@ -208,26 +209,27 @@ MCP is optional. After the release installer, enable it without a checkout:
 ```
 
 For a checkout, use `.venv/bin/pip install -e '.[mcp]'`, then
-`.venv/bin/omapreview-mcp`. The current-source MCP lifecycle requires SDK
-2.2.0 or newer. For an Arch package install, use `python-mcp` only if
-`pacman -Si python-mcp` reports version 2.2.0 or newer. The tested Arch ARM
-repository has 1.29.0, so use a checkout venv with `.[mcp]` there instead.
+`.venv/bin/omapreview-mcp`. MCP requires SDK 2.2.0 or newer. For an Arch
+package installation, check that the available `python-mcp` meets that version;
+otherwise use the visitor installer’s managed venv.
 Configure the absolute server path in an MCP client.
-New installers also link both `omapreview-mcp` and `omepreview-mcp` into
-`~/.local/bin`; current source additionally supports `omapreview mcp`.
+The installers also link both `omapreview-mcp` and `omepreview-mcp` into
+`~/.local/bin`; `omapreview mcp` is another server entry point.
 The base CLI works without MCP.
 
-The current source adds workflow coverage beyond v0.1.1's document operations:
-search with hit geometry, signature-library management, live editor proposals
-and history, recording handoff, exports, and clipboard/external-app handoffs.
-These additions are pending release; the published v0.1.1 installer does not
-contain them yet. Discover the exact contract with `omapreview workflow-schema`
+Version 0.2.0 adds application workflows alongside PDF operations: search
+with hit geometry, signature-library management, live editor proposals and
+history, recording handoff, exports, and clipboard/external-app handoffs.
+Discover the contract with `omapreview workflow-schema`
 or MCP `workflow_schema`, then use `workflow` or `run_workflow`. See the
 [workflow matrix and safety contract](docs/ops.md#application-workflows).
 Consequential edits default to proposals. Sharing requires explicit confirmation;
 an external-app handoff does not mean the file was delivered.
 
-See the [agent playbook](skill/SKILL.md) for PDF task workflows.
+MCP `render_page` returns an actual page image so agents can verify saved
+results. OCR supports preflight, progress and cancellation through the same
+shared engine. See the [agent playbook](skill/SKILL.md) for separate CLI/MCP
+recipes and task-specific verification steps.
 
 ## Project notes
 

@@ -14,7 +14,7 @@ import tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
 HELPER = ROOT / "packaging" / "build-source-asset.py"
-VERSION = "0.1.1"
+VERSION = "0.2.0"
 SOURCE_URL = (
     f"https://github.com/Skeptomenos/omapreview/releases/download/v{VERSION}/"
     f"omapreview-{VERSION}-src.tar.gz"
@@ -106,13 +106,13 @@ def test_release_metadata_uses_one_version_source_asset_and_checksum():
     assert len(set(hashes)) == 1
 
     srcinfo = (ROOT / "packaging/aur/omapreview/.SRCINFO").read_text(encoding="utf-8")
-    assert "pkgver = 0.1.1" in srcinfo
+    assert f"pkgver = {VERSION}" in srcinfo
     assert f"source = omapreview-{VERSION}-src.tar.gz::{SOURCE_URL}" in srcinfo
     assert f"sha256sums = {hashes[0]}" in srcinfo
 
     for path in (ROOT / "README.md", ROOT / "index.md", ROOT / "AGENTS.md"):
         text = path.read_text(encoding="utf-8")
-        assert "releases/download/v0.1.1/install.sh" in text
+        assert f"releases/download/v{VERSION}/install.sh" in text
         assert "releases/download/v0.1.0/install.sh" not in text
 
 
@@ -126,6 +126,7 @@ def test_source_asset_is_reproducible_and_ignores_packaging_pins(tmp_path):
         "pyproject.toml": '[project]\nname = "fixture"\nversion = "0.1.1"\n',
         "src/module.py": "VALUE = 1\n",
         "README.md": "fixture\n",
+        "CHANGELOG.md": "fixture changelog\n",
         "LICENSE": "fixture license\n",
         "share/omapreview.desktop": "[Desktop Entry]\n",
         "share/icons/omapreview.png": "synthetic icon\n",
@@ -158,6 +159,7 @@ def test_source_asset_is_reproducible_and_ignores_packaging_pins(tmp_path):
     with tarfile.open(first_output, mode="r:gz") as archive:
         members = archive.getmembers()
         names = {member.name for member in members}
+        assert prefix + "CHANGELOG.md" in names
         assert prefix + "skill/SKILL.md" in names
         assert prefix + "share/icons/omapreview.png" in names
         assert not any(name.startswith(prefix + "packaging/") for name in names)

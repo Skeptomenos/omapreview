@@ -19,6 +19,7 @@ SOURCE_PATHS = (
     "pyproject.toml",
     "src",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE",
     "share",
     "skill",
