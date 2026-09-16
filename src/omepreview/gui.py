@@ -1235,6 +1235,36 @@ class Editor:
             self.selected = proposed[0]
             self.page_no = proposed[0]["page"]
 
+    def stage_page_operation(self, operation: dict) -> None:
+        """Stage page surgery with native coordinate rebasing and one undo step."""
+        op = validate_all([operation])[0]
+        if op["op"] not in {"delete_pages", "rotate_pages", "move_pages", "insert_pages", "crop_pages"}:
+            raise OpError("expected a page-preview operation")
+        self._ensure_source_current()
+        before = {"kind": "pending", "pending": copy.deepcopy(self.pending),
+                  "page_ops": copy.deepcopy(self.page_preview.page_ops)}
+        cropped = None
+        selected_index = next((i for i, item in enumerate(self.pending) if item is self.selected), None)
+        if op["op"] == "crop_pages":
+            cropped = copy.deepcopy(self.pending)
+            for page in op["pages"]:
+                transform_pending_for_crop(cropped, page - 1, op["rect"])
+        # Rebuild first. A rejected op retains pending work, history and its
+        # imported sources. Identity callbacks rebind delete/move/insert.
+        if op["op"] == "insert_pages" and "source" in op:
+            self.page_preview.add_insert_pdf(op["after"], op["source"], op.get("source_pages"))
+        elif op["op"] == "insert_pages" and "image" in op:
+            self.page_preview.add_insert_image(op["after"], op["image"])
+        else:
+            self.page_preview.append_op(op)
+        if cropped is not None:
+            self.pending[:] = cropped
+            self.selected = cropped[selected_index] if selected_index is not None else None
+        self.undo_stack.append(before)
+        self.redo_stack.clear()
+        self._prune_page_sources()
+        self.invalidate_view()
+
     def to_ops(self, *, execution_order: bool = True) -> list[dict]:
         ops = []
         for it in self.pending:
@@ -2347,10 +2377,7 @@ def run(pdf: str | None = None, ops_file: str | None = None, session_id: str | N
                     crop = [
                         min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1),
                     ]
-                    ed.checkpoint()
-                    transform_pending_for_crop(ed.pending, ed.page_no, crop)
-                    ed.page_preview.add_crop_pages([ed.page_no + 1], crop)
-                    ed.invalidate_view()
+                    ed.stage_page_operation({"op": "crop_pages", "pages": [ed.page_no + 1], "rect": crop})
                     on_sidebar_change()
                     toast("Crop not applied until Save")
             if ed.tool == "redact" and ed.rubber:

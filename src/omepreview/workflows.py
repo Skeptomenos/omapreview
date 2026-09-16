@@ -146,15 +146,17 @@ def signatures(action: str = "list", name: str = "default", source: str | None =
         if p.suffix.lower() not in (".svg", ".png"):
             raise OpError("signature source must be SVG or PNG")
         signature._decode_candidate(p, p.read_bytes(), p.suffix.lower())
-        if name in signature.list_names() and not confirm:
+        expected = signature.identity(name)
+        if expected is not None and not confirm:
             return {"status": "needs_confirmation", "name": name, "reason": "replace existing signature", "written": False}
-        signature.add(p, name)
+        signature.add(p, name, expected=expected)
         return {"status": "saved", **signatures("inspect", name)}
     if action == "remove":
+        expected = signature.identity(name)
         result = signatures("inspect", name)
         if not confirm:
             return {"status": "needs_confirmation", **result, "written": False}
-        signature.remove(name)
+        signature.remove(name, expected=expected)
         return {"status": "removed", "name": name, "remaining": signature.list_names()}
     raise OpError("signature action must be list, inspect, add, import or remove")
 
@@ -165,9 +167,7 @@ def record_signature(action: str = "start", name: str = "default", job: str | No
     from . import handoff
     if action == "start":
         signature._validate_name(name)
-        if name in signature.list_names() and not confirm:
-            return {"status": "needs_confirmation", "name": name, "written": False}
-        return handoff.start_recording(name, click)
+        return handoff.start_recording(name, click, confirm=confirm)
     if action in ("status", "cancel") and job:
         return handoff.recording_status(job, cancel=action == "cancel")
     raise OpError("record_signature needs start, or status/cancel with a job ID")
@@ -220,8 +220,11 @@ def export(path: str, action: str = "copy", output: str | None = None, confirm: 
         import tempfile
         # Stage through the shared engine, then publish without clobbering.
         with tempfile.TemporaryDirectory(prefix="omapreview-export-") as tmp:
+            from .fs_privacy import atomic_write_private
+            snapshot = Path(tmp) / "source.pdf"
+            atomic_write_private(snapshot, blob)
             staged = Path(tmp) / "flat.pdf"
-            engine.flatten(source, output=staged)
+            engine.flatten(snapshot, output=staged)
             publish_new(dest, staged.read_bytes())
     elif action == "copy":
         publish_new(dest, blob)

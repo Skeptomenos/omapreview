@@ -13,6 +13,9 @@ existing default.svg still places.
 from __future__ import annotations
 
 import math
+import hashlib
+import fcntl
+from contextlib import contextmanager
 import os
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -136,7 +139,46 @@ def path_for(name: str) -> Path:
     return store_dir(create=False) / f"{name}.svg"
 
 
-def add(source: str | Path, name: str = "default") -> Path:
+_UNSPECIFIED = object()
+
+
+@contextmanager
+def locked_store():
+    """Serialize cooperating library writers; never hold this while drawing."""
+    directory = ensure_private_dir(store_dir(create=True))
+    with (directory / ".store.lock").open("a") as handle:
+        os.chmod(handle.name, 0o600)
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+
+
+def identity(name: str) -> dict | None:
+    """Identity of the asset a caller reviewed, or None for a new name."""
+    p = path_for(name)
+    if not p.is_file():
+        return None
+    return {"path": str(p.resolve()), "sha256": hashlib.sha256(p.read_bytes()).hexdigest()}
+
+
+def _check_identity(name: str, expected) -> None:
+    if expected is not _UNSPECIFIED and identity(name) != expected:
+        raise ValueError(
+            f"signature {name!r} changed since review; inspect the current asset "
+            "and start a new confirmed request or choose another name"
+        )
+
+
+def add(source: str | Path, name: str = "default", *, expected=_UNSPECIFIED) -> Path:
+    _validate_name(name)
+    with locked_store():
+        _check_identity(name, expected)
+        return _add(source, name)
+
+
+def _add(source: str | Path, name: str = "default") -> Path:
     source = Path(source)
     if not source.is_file():
         raise FileNotFoundError(f"no such image: {source}")
@@ -190,7 +232,14 @@ def list_names() -> list[str]:
     return sorted(names)
 
 
-def remove(name: str) -> None:
+def remove(name: str, *, expected=_UNSPECIFIED) -> None:
+    _validate_name(name)
+    with locked_store():
+        _check_identity(name, expected)
+        _remove(name)
+
+
+def _remove(name: str) -> None:
     _validate_name(name)
     removed = False
     for d in (store_dir(create=False), legacy_store_dir()):

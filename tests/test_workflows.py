@@ -274,3 +274,161 @@ def test_public_pending_targets_match_advertised_order(mode, tmp_path, monkeypat
         asyncio.run(check())
     finally:
         bridge.close(); ed.close()
+
+
+@pytest.mark.parametrize('existing', [False, True])
+def test_recorder_refuses_a_signature_changed_while_drawing(tmp_path, monkeypatch, existing):
+    from omepreview import handoff, signature, draw, editor_session
+    source, candidate, env = fixtures(tmp_path)
+    monkeypatch.setenv('OMEPREVIEW_SIGNATURE_DIR', env['OMEPREVIEW_SIGNATURE_DIR'])
+    monkeypatch.setenv('XDG_RUNTIME_DIR', env['XDG_RUNTIME_DIR'])
+    monkeypatch.setattr(editor_session, 'desktop_ready', lambda: None)
+    monkeypatch.setattr(handoff.subprocess, 'Popen', lambda *a, **kw: type('P', (), {'pid': 99999999})())
+    if existing:
+        signature.add(candidate, 'race')
+    started = handoff.start_recording('race', True, confirm=existing)
+    concurrent = tmp_path / 'concurrent.svg'
+    concurrent.write_text(candidate.read_text().replace('M1 20 L50 5', 'M2 20 L40 8'))
+    def record(path, **kw):
+        signature.add(concurrent, 'race')
+        Path(path).write_bytes(candidate.read_bytes())
+        return 0
+    monkeypatch.setattr(draw, '_gtk_main', record)
+    handoff.main(started['job'])
+    status = handoff.recording_status(started['job'])
+    assert status['status'] == 'failed' and 'changed since review' in status['error']
+    assert signature.get('race').read_bytes() == concurrent.read_bytes()
+
+
+def test_recorder_startup_death_and_fast_child_state(tmp_path, monkeypatch):
+    from omepreview import handoff, editor_session
+    _, _, env = fixtures(tmp_path)
+    monkeypatch.setenv('OMEPREVIEW_SIGNATURE_DIR', env['OMEPREVIEW_SIGNATURE_DIR'])
+    monkeypatch.setenv('XDG_RUNTIME_DIR', env['XDG_RUNTIME_DIR'])
+    monkeypatch.setattr(editor_session, 'desktop_ready', lambda: None)
+    monkeypatch.setattr(handoff.subprocess, 'Popen', lambda *a, **kw: type('P', (), {'pid': 99999999})())
+    started = handoff.start_recording('startup', True)
+    assert handoff.recording_status(started['job'])['status'] == 'failed'
+    def fast_child(argv, **kw):
+        directory = handoff._directory(argv[-1])
+        status = json.loads((directory / 'status.json').read_text())
+        status.update(status='cancelled', saved=False)
+        handoff._write(directory, status)
+        return type('P', (), {'pid': 99999999})()
+    monkeypatch.setattr(handoff.subprocess, 'Popen', fast_child)
+    fast = handoff.start_recording('fast', True)
+    assert handoff.recording_status(fast['job'])['status'] == 'cancelled'
+
+
+@pytest.mark.parametrize('mode', ['cli', 'mcp'])
+def test_public_crop_rebases_pending_targets_and_rolls_back_failure(mode, tmp_path, monkeypatch):
+    from omepreview.gui import Editor
+    from omepreview.editor_session import Bridge
+    source, _, env = fixtures(tmp_path)
+    source.unlink()
+    with pymupdf.open() as doc:
+        page = doc.new_page(width=300, height=200)
+        page.insert_text((80, 65), 'SECRET')
+        page.insert_text((80, 160), 'CONTROL')
+        widget = pymupdf.Widget(); widget.field_name = 'field'
+        widget.field_type = pymupdf.PDF_WIDGET_TYPE_TEXT
+        widget.rect = pymupdf.Rect(80, 80, 160, 100); page.add_widget(widget)
+        doc.save(source)
+    original = source.read_bytes()
+    monkeypatch.setenv('XDG_RUNTIME_DIR', env['XDG_RUNTIME_DIR'])
+    ed = Editor(str(source), None)
+    bridge = Bridge(ed, lambda cb: cb(), lambda: None, lambda: None)
+    async def check():
+        async with client(mode, env) as call:
+            async def state():
+                return await call('editor', {'action': 'status', 'session': bridge.session})
+            async def act(action, **kwargs):
+                s = await state()
+                return await call('editor', {'action': action, 'session': bridge.session, 'revision': s['revision'], **kwargs})
+            await act('stage', ops=[
+                {'op': 'fill_field', 'field': 'field', 'value': 'filled', 'page': 1, 'rect': [80,80,160,100]},
+                {'op': 'note', 'page': 1, 'at': [200,120], 'text': 'target note'},
+                {'op': 'text_box', 'page': 1, 'rect': [170,85,270,105], 'text': 'textbox', 'size': 10},
+                {'op': 'redact', 'page': 1, 'match': 'SECRET'},
+            ])
+            before = await state()
+            await call('editor', {'action': 'stage', 'session': bridge.session, 'revision': before['revision'],
+                                  'ops': [{'op': 'crop_pages', 'pages': [1], 'rect': [400,400,500,500]}]}, error=True)
+            after = await state()
+            assert after == before
+            assert source.read_bytes() == original
+            cropped = await act('stage', ops=[{'op':'crop_pages','pages':[1],'rect':[40,40,280,180]}])
+            assert cropped['pending'][0]['rect'] == [40,40,120,60]
+            assert cropped['pending'][1]['at'] == [160,80]
+            assert cropped['pending'][2]['rect'] == [130,45,230,65]
+            saved = await act('save', confirm=True)
+            with pymupdf.open(saved['path']) as doc:
+                assert next(doc[0].widgets()).field_value == 'filled'
+                assert 'SECRET' not in doc[0].get_text() and 'CONTROL' in doc[0].get_text()
+                assert 'textbox' in doc[0].get_text()
+                assert any(a.info['content'] == 'target note' for a in doc[0].annots())
+            assert source.read_bytes() == original  # redaction copy-save preserves source
+    try:
+        asyncio.run(check())
+    finally:
+        bridge.close(); ed.close()
+
+
+@pytest.mark.parametrize('mode', ['cli', 'mcp'])
+def test_public_replace_preserves_position_and_history(mode, tmp_path, monkeypatch):
+    from omepreview.gui import Editor
+    from omepreview.editor_session import Bridge
+    source, _, env = fixtures(tmp_path)
+    with pymupdf.open(source) as doc:
+        w = pymupdf.Widget(); w.field_name = 'repeat'
+        w.field_type = pymupdf.PDF_WIDGET_TYPE_TEXT; w.rect = pymupdf.Rect(20,80,160,100)
+        doc[0].add_widget(w); doc.saveIncr()
+    monkeypatch.setenv('XDG_RUNTIME_DIR', env['XDG_RUNTIME_DIR'])
+    ed = Editor(str(source), None)
+    bridge = Bridge(ed, lambda cb: cb(), lambda: None, lambda: None)
+    async def check():
+        async with client(mode, env) as call:
+            async def act(action, **kw):
+                s = await call('editor', {'action':'status','session':bridge.session})
+                return await call('editor', {'action':action,'session':bridge.session,'revision':s['revision'],**kw})
+            def fill(value): return {'op':'fill_field','field':'repeat','value':value,'page':1}
+            await act('stage', ops=[fill('FIRST'), fill('LAST')])
+            changed = await act('replace', index=0, ops=[fill('FIRST EDITED')])
+            assert [p['value'] for p in changed['pending']] == ['FIRST EDITED','LAST']
+            reverted = await act('undo', confirm=True)
+            assert [p['value'] for p in reverted['pending']] == ['FIRST','LAST']
+            await act('redo', confirm=True)
+            await act('save', confirm=True)
+            with pymupdf.open(source) as doc:
+                assert next(doc[0].widgets()).field_value == 'LAST'
+            await act('stage', ops=[{'op':'note','page':1,'at':[40,120],'text':'replace me'},
+                                    {'op':'note','page':1,'at':[80,120],'text':'last note'}])
+            replaced = await act('replace', index=0, ops=[{'op':'highlight','page':1,'match':'TARGET'}])
+            assert replaced['pending'][0]['op']=='highlight' and replaced['pending'][-1]['text']=='last note'
+    try:
+        asyncio.run(check())
+    finally:
+        bridge.close(); ed.close()
+
+
+def test_flatten_export_uses_the_fingerprinted_snapshot(tmp_path, monkeypatch):
+    source, _, _ = fixtures(tmp_path)
+    original = source.read_bytes()
+    replacement = tmp_path / 'replacement.pdf'
+    with pymupdf.open() as doc:
+        doc.new_page().insert_text((72,72),'CONCURRENT REPLACEMENT')
+        doc.save(replacement)
+    real_read = workflows.pdf_bytes
+    def capture_then_replace(path):
+        snapshot = real_read(path)
+        os.replace(replacement, source)
+        return snapshot
+    monkeypatch.setattr(workflows, 'pdf_bytes', capture_then_replace)
+    out = tmp_path / 'flattened.pdf'
+    result = workflows.run('export', {'path':str(source),'action':'flatten','output':str(out),'confirm':True})
+    assert result['source_fingerprint']['value'] == hashlib.sha256(original).hexdigest()
+    with pymupdf.open(out) as doc:
+        assert len(doc) == 3 and 'TARGET 0 CONTROL' in doc[0].get_text()
+        assert 'CONCURRENT' not in doc[0].get_text()
+    with pymupdf.open(source) as doc:
+        assert 'CONCURRENT REPLACEMENT' in doc[0].get_text()

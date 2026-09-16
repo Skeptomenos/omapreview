@@ -226,10 +226,14 @@ class Bridge:
                 ops = validate_all(payload.get("ops"))
                 if len(ops) != 1 or ops[0]["op"] not in SUPPORTED_PROPOSAL_OPS:
                     raise OpError("replace needs exactly one markup operation")
+            original_count = len(ed.pending)
             self.stage(payload.get("ops"))
             if action == "replace":
-                # stage checkpoints the original state before appending resolved ghosts.
-                del ed.pending[index]
+                # Keep the operation's position, including multi-hit expansion:
+                # field overwrites and overlapping marks depend on this order.
+                replacements = ed.pending[original_count:]
+                del ed.pending[original_count:]
+                ed.pending[index:index + 1] = replacements
         elif action in {"select", "move", "delete"}:
             index = payload.get("index")
             if type(index) is not int or not 0 <= index < len(ed.pending):
@@ -292,19 +296,7 @@ class Bridge:
         ed._ensure_source_current()
         page_kinds = {"delete_pages", "rotate_pages", "move_pages", "insert_pages", "crop_pages"}
         if len(validated) == 1 and validated[0]["op"] in page_kinds:
-            before = {"kind": "pending", "pending": copy.deepcopy(ed.pending),
-                      "page_ops": copy.deepcopy(ed.page_preview.page_ops)}
-            op = validated[0]
-            if op["op"] == "insert_pages" and "source" in op:
-                ed.page_preview.add_insert_pdf(op["after"], op["source"], op.get("source_pages"))
-            elif op["op"] == "insert_pages" and "image" in op:
-                ed.page_preview.add_insert_image(op["after"], op["image"])
-            else:
-                ed.page_preview.append_op(op)
-            ed.undo_stack.append(before)
-            ed.redo_stack.clear()
-            ed._prune_page_sources()
-            ed.invalidate_view()
+            ed.stage_page_operation(validated[0])
             return
         if any(op["op"] not in SUPPORTED_PROPOSAL_OPS for op in validated):
             raise OpError("stage one page operation at a time, or a markup batch; extract_pages uses export/apply")

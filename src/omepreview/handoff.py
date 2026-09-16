@@ -7,6 +7,7 @@ import re
 import subprocess
 import sys
 import uuid
+import time
 
 from .fs_privacy import atomic_write_private, ensure_private_dir, scratch_dir
 from .ops import OpError
@@ -22,18 +23,28 @@ def _write(directory, value):
     atomic_write_private(directory / "status.json", json.dumps(value).encode())
 
 
-def start_recording(name, click):
+def start_recording(name, click, *, confirm=False):
     from .editor_session import desktop_ready
+    from . import signature
+    signature._validate_name(name)
+    with signature.locked_store():
+        expected = signature.identity(name)
+        if expected is not None and not confirm:
+            return {"status": "needs_confirmation", "name": name, "written": False}
     desktop_ready()
     job = uuid.uuid4().hex
     directory = ensure_private_dir(_directory(job))
-    config = {"job": job, "name": name, "click": click, "status": "starting"}
+    config = {"job": job, "name": name, "click": click, "status": "starting",
+              "expected_signature": expected, "started_at": time.time()}
     _write(directory, config)
     log = directory / "log.txt"
     fd = os.open(log, os.O_CREAT | os.O_WRONLY | os.O_EXCL, 0o600)
     with os.fdopen(fd, "wb") as errors:
         proc = subprocess.Popen([sys.executable, "-m", "omepreview.handoff", job],
                                 stdin=subprocess.DEVNULL, stdout=errors, stderr=errors, start_new_session=True)
+    # Parent and worker own different files: a fast child can never have its
+    # terminal status overwritten by a late parent startup write.
+    atomic_write_private(directory / "launch.json", json.dumps({"pid": proc.pid}).encode())
     return {**config, "pid": proc.pid, "saved": False, "instructions": "Human: draw in the recorder and press Enter to save; Escape cancels. Poll record_signature status."}
 
 
@@ -44,6 +55,12 @@ def recording_status(job, cancel=False):
         raise OpError("unknown recorder job; use the ID returned by start")
     status = json.loads(path.read_text())
     terminal = {"saved", "cancelled", "failed"}
+    launch = directory / "launch.json"
+    if not status.get("pid") and launch.is_file():
+        status["pid"] = json.loads(launch.read_text())["pid"]
+    if status["status"] == "starting" and time.time() - status.get("started_at", 0) > 15:
+        atomic_write_private(directory / "cancel", b"startup timeout")
+        status.update(status="failed", saved=False, error="recorder startup did not complete within 15 seconds; inspect the library and retry")
     if cancel and status["status"] not in terminal:
         atomic_write_private(directory / "cancel", b"cancel")
         return {**status, "status": "cancellation_requested", "saved": False}
@@ -67,11 +84,16 @@ def main(job):
     _write(directory, status)
     candidate = directory / "candidate.svg"
     try:
-        result = draw._gtk_main(str(candidate), trackpad=not status["click"], cancel_file=directory / "cancel")
+        if (directory / "cancel").exists():
+            result = 1
+        elif time.time() - status["started_at"] > 15:
+            raise RuntimeError("startup deadline expired before the recorder opened")
+        else:
+            result = draw._gtk_main(str(candidate), trackpad=not status["click"], cancel_file=directory / "cancel")
         if result != 0 or (directory / "cancel").exists():
             status["status"] = "cancelled"
         else:
-            dest = signature.add(candidate, status["name"])
+            dest = signature.add(candidate, status["name"], expected=status["expected_signature"])
             import hashlib
             status.update(status="saved", saved=True, path=str(dest), sha256=hashlib.sha256(dest.read_bytes()).hexdigest())
     except BaseException as exc:
