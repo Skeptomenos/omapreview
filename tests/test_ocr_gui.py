@@ -224,7 +224,7 @@ def test_incomplete_ocr_copy_message_names_pages_and_no_text():
     message = _ocr_completion_message(incomplete, "/tmp/synthetic-copy.pdf")
     assert "Saved OCR copy" in message and "searchable copy" not in message
     assert "Needs review: 1 (no_text)" in message
-    assert "Skipped pages: 2" in message
+    assert "Skipped pages: 2 (existing_text)" in message
     assert "No new searchable text was verified" in message
     complete = {"status": "complete", "recognized_pages": 1,
                 "pages": [{"page": 1, "status": "processed", "reason": "recognized"}]}
