@@ -107,14 +107,30 @@ sudo pacman -S --needed tesseract tesseract-data-eng ghostscript
 tesseract --list-langs
 ```
 
-Choose a matching `tesseract-data-<code>` package for another language. The
-installer does not download OCR language data or perform privileged OCR setup.
-Check available recognition support with `omapreview ocr-status`.
+English (`eng`) is the default OCR language. The command above installs its
+language data. The installer does not download OCR language data or perform
+privileged OCR setup. Check available recognition support with
+`omapreview ocr-status`.
 OCRmyPDF 17.11.0 is validated on Linux aarch64 with Python 3.14.7.
 
 The Arch package recipes include the application and list the system OCR tools
 as optional dependencies. For an installation that manages the supported
 Python OCR backend too, use the visitor installer with `--with-ocr`.
+
+### Add OCR languages
+
+Install the matching `tesseract-data-<code>` package for each language you need.
+For example, add German (`deu`) on Arch / Omarchy:
+
+```bash
+sudo pacman -S --needed tesseract-data-deu
+omapreview ocr-status
+```
+
+Confirm that `deu` appears in the language list. Open **Recognize text** and
+select `deu` for German, or both `deu` and `eng` for mixed German/English
+documents. If the dialog was already open, close and reopen it to refresh the
+installed languages. Adding a language pack does not change the English default.
 
 ### Recognize scanned text
 
