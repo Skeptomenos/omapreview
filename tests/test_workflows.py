@@ -321,7 +321,13 @@ def test_recorder_startup_death_and_fast_child_state(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize('mode', ['cli', 'mcp'])
-def test_public_crop_rebases_pending_targets_and_rolls_back_failure(mode, tmp_path, monkeypatch):
+@pytest.mark.parametrize('crop,pages,delta', [
+    ([40,40,280,180], [1], 40),
+    ([-40,-40,280,180], [1], 0),
+    ([40,40,400,300], [1], 40),
+    ([20,20,280,180], [1,1], 40),
+])
+def test_public_crop_rebases_pending_targets_and_rolls_back_failure(mode, crop, pages, delta, tmp_path, monkeypatch):
     from omepreview.gui import Editor
     from omepreview.editor_session import Bridge
     source, _, env = fixtures(tmp_path)
@@ -357,10 +363,10 @@ def test_public_crop_rebases_pending_targets_and_rolls_back_failure(mode, tmp_pa
             after = await state()
             assert after == before
             assert source.read_bytes() == original
-            cropped = await act('stage', ops=[{'op':'crop_pages','pages':[1],'rect':[40,40,280,180]}])
-            assert cropped['pending'][0]['rect'] == [40,40,120,60]
-            assert cropped['pending'][1]['at'] == [160,80]
-            assert cropped['pending'][2]['rect'] == [130,45,230,65]
+            cropped = await act('stage', ops=[{'op':'crop_pages','pages':pages,'rect':crop}])
+            assert cropped['pending'][0]['rect'] == [80-delta,80-delta,160-delta,100-delta]
+            assert cropped['pending'][1]['at'] == [200-delta,120-delta]
+            assert cropped['pending'][2]['rect'] == [170-delta,85-delta,270-delta,105-delta]
             saved = await act('save', confirm=True)
             with pymupdf.open(saved['path']) as doc:
                 assert next(doc[0].widgets()).field_value == 'filled'

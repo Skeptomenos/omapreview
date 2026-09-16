@@ -1247,8 +1247,17 @@ class Editor:
         selected_index = next((i for i, item in enumerate(self.pending) if item is self.selected), None)
         if op["op"] == "crop_pages":
             cropped = copy.deepcopy(self.pending)
-            for page in op["pages"]:
-                transform_pending_for_crop(cropped, page - 1, op["rect"])
+            doc = self.page_doc()
+            engine._validate_page_indices(doc, op["pages"])
+            resolved_boxes = {}
+            for page_number in op["pages"]:
+                page = doc[page_number - 1]
+                base = resolved_boxes.get(page_number, page.cropbox)
+                resolved = engine._crop_rect_to_absolute(page, op["rect"], base=base)
+                local = [resolved.x0 - base.x0, resolved.y0 - base.y0,
+                         resolved.x1 - base.x0, resolved.y1 - base.y0]
+                transform_pending_for_crop(cropped, page_number - 1, local)
+                resolved_boxes[page_number] = resolved
         # Rebuild first. A rejected op retains pending work, history and its
         # imported sources. Identity callbacks rebind delete/move/insert.
         if op["op"] == "insert_pages" and "source" in op:

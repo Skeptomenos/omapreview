@@ -214,10 +214,12 @@ def _normalize_rotation(degrees: int) -> int:
     return degrees % 360 if degrees >= 0 else (360 + degrees) % 360
 
 
-def _crop_rect_to_absolute(page: pymupdf.Page, rect: list[float]) -> pymupdf.Rect:
+def _crop_rect_to_absolute(
+    page: pymupdf.Page, rect: list[float], *, base: pymupdf.Rect | None = None
+) -> pymupdf.Rect:
     """Map a crop rect in current page (CropBox) space to absolute PDF coordinates."""
     user = pymupdf.Rect(rect)
-    base = page.cropbox
+    base = page.cropbox if base is None else base
     abs_rect = pymupdf.Rect(
         base.x0 + user.x0,
         base.y0 + user.y0,
