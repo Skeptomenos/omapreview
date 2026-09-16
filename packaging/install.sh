@@ -19,7 +19,7 @@ VERSION="0.2.0"
 # This release asset is built from the verified application tree so
 # Super+Space opens an empty editor without requiring a git clone.
 TARBALL_URL="https://github.com/Skeptomenos/omapreview/releases/download/v${VERSION}/omapreview-${VERSION}-src.tar.gz"
-TARBALL_SHA256="9c5dcfd5e724c7063fd401b576c599feed0f500426a55e24d45d1f173e994d91"
+TARBALL_SHA256="dc3f9a208ab9d3b9059ed222be470294e35a4146d2f69e9b9cc296f9707e8b7f"
 PREFIX="${HOME}/.local/share/omapreview"
 BIN_DIR="${HOME}/.local/bin"
 APP_DIR="${HOME}/.local/share/applications"

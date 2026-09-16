@@ -17,7 +17,7 @@ optdepends=(
 makedepends=('python-build' 'python-installer' 'python-hatchling' 'python-wheel')
 # Deterministic application source asset; extracts to omapreview-$pkgver.
 source=("$pkgname-$pkgver-src.tar.gz::https://github.com/Skeptomenos/omapreview/releases/download/v$pkgver/omapreview-$pkgver-src.tar.gz")
-sha256sums=('9c5dcfd5e724c7063fd401b576c599feed0f500426a55e24d45d1f173e994d91')
+sha256sums=('dc3f9a208ab9d3b9059ed222be470294e35a4146d2f69e9b9cc296f9707e8b7f')
 
 build() {
   cd "$pkgname-$pkgver"
