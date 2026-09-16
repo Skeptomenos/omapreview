@@ -12,6 +12,8 @@ Each op is available through `omepreview apply --ops file.json` and MCP
 
 | Op | CLI | MCP |
 |----|-----|-----|
+| OCR status | `omapreview ocr-status` | `ocr_status` |
+| OCR preflight / execute | `omapreview ocr FILE -o NEW [--confirm --expected-source-sha256 HASH]` | `apply_ops` with standalone `ocr` |
 | Discovery | `omepreview operations` | `operation_schema` |
 | Page render | `omepreview snapshot FILE` | `render_page` (PNG + metadata) |
 | Page list | `omepreview pages FILE --list` | `list_pages` |
@@ -552,8 +554,51 @@ Clipboard PDF payloads are limited to 64 MiB; Wayland uses wl-copy/wl-paste,
 X11 uses xclip. Missing helpers return actionable errors. A clipboard owner can
 be replaced by another app; inspect the final pasted artifact.
 
-OCR uses the shared operation schema and engine contract above. Dedicated CLI/MCP
-lifecycle adapters and the GUI OCR task controls are separate adapter work. The
-recorder-specific handoff remains separate from OCR execution.
+OCR uses the shared operation schema and engine contract above. `ocr-status`
+and MCP `ocr_status` inspect the exact optional backend and installed languages.
+CLI `ocr FILE -o NEW --json` preflights by default; select pages/languages with
+repeatable `--page` and `--language`. Execute with `--confirm` and
+`--expected-source-sha256` from the approved preflight. Generic CLI `apply` also
+requires `--confirm` for OCR. MCP `apply_ops` defaults to dry-run; execute with
+`dry_run=false` and the approved `expected_source_sha256` in the op. Ordinary
+operation confirmation behavior is unchanged.
+
+CLI OCR progress is JSON lines on stderr; stdout contains only the final report.
+SIGINT and SIGTERM request cancellation and wait for the engine's process/staging
+cleanup. Cancellation returns exit 130; other OCR failures return 1. The final
+stderr JSON error is `{error:{code,message,ocr},output:null,applied:[]}`. MCP OCR
+errors set `isError=true` with the same JSON in structured content and text. Recognized/skipped/needs-review page outcomes
+and source/output hashes remain in the engine report. Human CLI output includes
+the OCR report, so zero recognized pages cannot be hidden by a generic success mark.
+
+MCP runs OCR in a request-owned thread. The engine's callback only queues phase
+events; the async adapter drains them using the request progress token. Without
+a token, no notifications are sent. Phases 0–5 are preflight, staging, recognizing,
+verifying, publishing, complete, with phase names. MCP requires SDK 2.2.0 or
+newer; the older 1.2 SDK rejects cancellation notifications. Recognition is indeterminate. Request cancellation and stdio EOF set the
+engine cancellation event and shield the join until cleanup completes; no live
+worker is abandoned. The cooperative engine deadline and bounded subprocess
+teardown remain in force. Native PDF calls cannot be interrupted internally,
+so a native call can delay the join. Hard parent death remains unproven. If
+publication wins a cancellation race, the saved result remains complete. A lost
+response requires independently reading/rendering the destination before retry.
+
+Editor workflow actions `ocr_start`, `ocr_status`, and `ocr_cancel` route to the
+live editor's small local task record. Start passes current `revision`, `confirm`,
+`op` with the approved source hash, and a new `output`. Status/cancel pass exact
+`task_id`, without requiring revision. They return cached
+`task_id,status,phase,completed,total,destination,output,result,error,source_revision,
+session_changed,cancellation_requested`. Output is null until publication;
+result is the engine envelope. States are running, cancelling, complete,
+needs_review, failed, cancelled, timed_out. Cancellation requested is not cleanup
+completion. The bridge never implicitly opens the result. The GUI executor ships
+with the separate GUI batch; headless OCR requires no GUI session. Recorder
+handoff is separate from OCR execution.
+
+After saving, read and render the destination through the same selected interface,
+match fingerprints, inspect expected phrases against actual pixels, and report
+all skipped/needs-review pages. Recognition is not transcription accuracy. The
+[progressive OCR recipe](../skill/references/ocr.md) covers independent CLI/MCP
+journeys plus saved search/highlight/redaction checks.
 
 Validation: [CLI/MCP workflow acceptance, 2026-09-16](evidence/full-interface-parity-2026-09-16.md).

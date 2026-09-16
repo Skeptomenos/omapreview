@@ -17,6 +17,7 @@ CLI = Path(sys.executable).with_name("omapreview")
 MCP = Path(sys.executable).with_name("omapreview-mcp")
 SCENARIOS = {
     "read-review.md",
+    "ocr.md",
     "desktop-workflows.md",
     "markup.md",
     "forms-signatures.md",

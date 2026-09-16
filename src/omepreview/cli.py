@@ -13,6 +13,9 @@ import math
 import os
 import shlex
 import shutil
+import signal
+import threading
+from contextlib import contextmanager
 import subprocess
 import sys
 import tempfile
@@ -25,6 +28,7 @@ from .ops import (
     MAX_SIGNATURE_WIDTH,
     MAX_STROKE_WIDTH,
     OpError,
+    OCRError,
     operation_catalog,
     validate_all,
 )
@@ -139,6 +143,10 @@ def _emit(data, as_json: bool):
 def _emit_human(data):
     if isinstance(data, dict) and "applied" in data:
         for op in data["applied"]:
+            if "ocr" in op:
+                json.dump(op["ocr"], sys.stdout, indent=2)
+                sys.stdout.write("\n")
+                continue
             label = op["op"]
             where = f"p{op['page']}" if "page" in op else ""
             detail = op.get("match") or op.get("field") or op.get("text") or op.get("signature") or ""
@@ -167,7 +175,7 @@ def _out_args(p: argparse.ArgumentParser):
 
 
 _CONSEQUENTIAL_OPS = frozenset(
-    {"place_signature", "redact", "delete_annotation", "delete_pages"}
+    {"place_signature", "redact", "delete_annotation", "delete_pages", "ocr"}
 )
 
 
@@ -186,12 +194,52 @@ def _edit_plan(args, op_list: list[dict]) -> tuple[list[dict], bool, bool]:
 
 def _run_edit(args, op_list):
     validated, consequential, dry_run = _edit_plan(args, op_list)
-    result = engine.apply(args.pdf, validated, output=args.output, dry_run=dry_run)
+    if any(op["op"] == "ocr" for op in validated):
+        with _ocr_signals() as cancel:
+            result = engine.apply(args.pdf, validated, output=args.output, dry_run=dry_run,
+                                  cancel_event=cancel, progress=_ocr_progress)
+    else:
+        result = engine.apply(args.pdf, validated, output=args.output, dry_run=dry_run)
     if dry_run and consequential:
         result["needs_confirmation"] = (
             "Dry run only. Re-run with --confirm after the user approves."
         )
     _emit(result, args.json)
+
+
+@contextmanager
+def _ocr_signals():
+    """Keep the synchronous engine alive until its owned processes are reaped."""
+    cancel = threading.Event()
+    previous = {}
+    try:
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            previous[sig] = signal.signal(sig, lambda *_: cancel.set())
+        yield cancel
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+
+
+def _ocr_progress(event):
+    # stdout is reserved for the final JSON/document result.
+    print(json.dumps({"ocr_progress": event}), file=sys.stderr, flush=True)
+
+
+def cmd_ocr_status(args):
+    from .ocr import capabilities
+    with _ocr_signals() as cancel:
+        _emit(capabilities(cancel_event=cancel), True)
+
+
+def cmd_ocr(args):
+    op = {"op": "ocr", "languages": args.language or ["eng"],
+          "timeout_seconds": args.timeout_seconds}
+    if args.page is not None:
+        op["pages"] = args.page
+    if args.expected_source_sha256 is not None:
+        op["expected_source_sha256"] = args.expected_source_sha256
+    _run_edit(args, [op])
 
 
 def cmd_read(args):
@@ -493,6 +541,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.set_defaults(func=cmd_operations)
 
+    p = sub.add_parser("ocr-status", help="inspect optional OCR dependencies and installed languages (JSON)")
+    p.set_defaults(func=cmd_ocr_status)
+    p = sub.add_parser("ocr", help="preflight a searchable copy; execute with --confirm and the reviewed source hash")
+    p.add_argument("pdf")
+    p.add_argument("--page", type=int, action="append", help="selected 1-based page (repeatable; default all)")
+    p.add_argument("--language", action="append", help="installed language identifier (repeatable; default eng)")
+    p.add_argument("--expected-source-sha256", help="source hash returned by the approved preflight")
+    p.add_argument("--timeout-seconds", type=int, default=300)
+    _out_args(p)
+    p.set_defaults(func=cmd_ocr)
+
     p = sub.add_parser("apply", help="apply an ops JSON file (or - for stdin)")
     p.add_argument("pdf")
     p.add_argument("--ops", required=True, help="path to ops JSON, or - for stdin")
@@ -717,6 +776,10 @@ def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     try:
         args.func(args)
+    except OCRError as exc:
+        print(json.dumps({"error": {"code": exc.code, "message": str(exc), "ocr": exc.ocr},
+                          "output": None, "applied": []}), file=sys.stderr)
+        return 130 if exc.code == "cancelled" else 1
     except (OpError, OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"omepreview: {exc}", file=sys.stderr)
         return 1

@@ -54,3 +54,6 @@ Call `run_workflow(name, arguments)` using the exact `workflow_schema` route.
 Search, signatures, recorder handoff, editor sessions, export, and clipboard
 work without a hidden CLI call. Load [desktop-workflows.md](desktop-workflows.md)
 for live sessions and handoff states. Error results are not completion.
+
+For OCR load [ocr.md](ocr.md). `ocr_status` is read-only; `apply_ops` handles
+preflight and confirmed execution with the approved source hash.

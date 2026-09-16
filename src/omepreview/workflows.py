@@ -178,8 +178,9 @@ def editor(action: str = "list", session: str | None = None, path: str | None = 
            ops: list[dict] | None = None, revision: str | None = None, confirm: bool = False,
            index: int | None = None, dx: float = 0, dy: float = 0,
            page: int | None = None, zoom: float | None = None, query: str | None = None,
-           fit: bool = False, hit: int = 0) -> dict:
-    """Live GUI sessions: list, open, status, stage, replace, select, move, delete, view, search, undo, redo, save, close. Open accepts optional PDF and proposal ops; returns ready only after actual editor status. All mutations require the latest status revision. Save/undo/redo and dirty close require confirm=true. Pending indices are 0-based; pages are 1-based. Stage accepts markup batches or one page operation; no PDF write until Save. Uses actual GTK model, never a simulated session. View zoom is percent (10..800), page is 1-based; fit=true restores fit-page. Search navigates the 0-based hit index in the actual view."""
+           fit: bool = False, hit: int = 0, op: dict | None = None,
+           output: str | None = None, task_id: str | None = None) -> dict:
+    """Live GUI sessions: ocr_start (confirmed source-bound op/output/revision), ocr_status/ocr_cancel (task_id, no revision; cached status, output only after publication; no implicit Open), list, open, status, stage, replace, select, move, delete, view, search, undo, redo, save, close. Open accepts optional PDF and proposal ops; returns ready only after actual editor status. All mutations require the latest status revision. Save/undo/redo and dirty close require confirm=true. Pending indices are 0-based; pages are 1-based. Stage accepts markup batches or one page operation; no PDF write until Save. Uses actual GTK model, never a simulated session. View zoom is percent (10..800), page is 1-based; fit=true restores fit-page. Search navigates the 0-based hit index in the actual view."""
     from . import editor_session
     if action == "list":
         return editor_session.list_sessions()
@@ -187,6 +188,13 @@ def editor(action: str = "list", session: str | None = None, path: str | None = 
         return editor_session.open_editor(path, ops)
     if not session:
         raise OpError("editor action needs an exact session ID from list/open")
+    if action in {"ocr_start", "ocr_status", "ocr_cancel"}:
+        payload = {"action": action}
+        if action == "ocr_start":
+            payload.update(revision=revision, confirm=confirm, op=op, output=output)
+        else:
+            payload["task_id"] = task_id
+        return editor_session.request(session, payload)
     return editor_session.request(session, {"action": action, "ops": ops, "revision": revision, "confirm": confirm,
                                            "index": index, "dx": dx, "dy": dy, "page": page, "zoom": zoom, "query": query, "fit": fit, "hit": hit})
 

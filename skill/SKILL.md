@@ -1,6 +1,6 @@
 ---
 name: omepreview
-description: Use for PDF reading, review, annotation, form filling, visual signing, redaction, page surgery, flattening, signature-library management, live editor review/history, search, or verified export/clipboard handoff. Choose the available CLI or MCP route and report incomplete work when a required check or capability is unavailable.
+description: Use for PDF reading, review, optional OCR/searchable copies, annotation, form filling, visual signing, redaction, page surgery, flattening, signature-library management, live editor review/history, search, or verified export/clipboard handoff. Choose the available CLI or MCP route and report incomplete work when a required check or capability is unavailable.
 ---
 
 # omepreview
@@ -34,6 +34,7 @@ are finite PDF points in unrotated CropBox-local space, with a top-left origin.
   JSON ops, output handling, and confirmation behavior.
 - MCP selected or preferred: read [`mcp.md`](references/mcp.md) for discovery,
   schemas, image blocks, structured results, and MCP-only verification.
+- Recognize scanned text or create a searchable copy: read [`ocr.md`](references/ocr.md).
 - Read, summarize, answer, or review: read [`read-review.md`](references/read-review.md).
 - Annotate, redline, stamp, or mark up: read [`markup.md`](references/markup.md).
 - Fill a form, sign, or initial: read [`forms-signatures.md`](references/forms-signatures.md).
@@ -47,8 +48,7 @@ does not hide a shell or PyMuPDF fallback.
 
 ## Stop truthfully
 
-Stop before writing when the requested signature is absent, text is scanned
-and OCR is required, a form target is ambiguous, authorization is denied, or a
+Stop before writing when the requested signature is absent, OCR is required but its optional backend or language is unavailable, a form target is ambiguous, authorization is denied, or a
 required saved-output check cannot run. If a mode fails, establish whether it
 wrote before changing modes. Never repeat an uncertain mutation blindly.
 Report a partial result only with the completed checks and the missing result.

@@ -26,8 +26,8 @@ an MCP-only route.
 
 Support each conclusion with a page number and exact observed text or visual
 fact. If the PDF has no extractable text and the request needs text search,
-state that it is scanned/image-only and OCR is not built in. Offer a visual
-review or ask for OCR text; do not invent text or claim a comparison/diff
+state that embedded text is unavailable. Load [ocr.md](ocr.md) for the optional
+searchable-copy route, or offer visual review. Do not invent text or claim a comparison/diff
 service. If review leads to markup, switch to the markup recipe and verify the
 saved output separately.
 

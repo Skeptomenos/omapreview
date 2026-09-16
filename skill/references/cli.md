@@ -42,7 +42,7 @@ is read-only. `snapshot` is read-only and supports `--clip X0,Y0,X1,Y1` in
 unrotated CropBox-local points.
 
 CLI consequential defaults are explicit: `sign`, `redact`,
-`delete-annotation`, `pages --delete`, and `flatten` need `--confirm`; an
+`delete-annotation`, `pages --delete`, `ocr`, and `flatten` need `--confirm`; an
 unconfirmed call proposes or dry-runs and does not publish the destination.
 Ordinary annotation, field, rotation, move, insert, crop, shape, and extract
 commands can write without `--confirm`; use `--dry-run` whenever proposing any
@@ -70,3 +70,6 @@ Arguments can come from `--args @file.json` or stdin with `--args -`. Results
 are always JSON. The schema lists exact fields and status meanings. Search,
 signature management, editor sessions, exports, and clipboard share this route.
 For desktop tasks load [desktop-workflows.md](desktop-workflows.md).
+
+For OCR load [ocr.md](ocr.md): `ocr-status` reports dependencies/languages;
+`ocr` preflights by default. Execution also needs the approved source hash.

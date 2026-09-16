@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import base64
 import json
+import inspect
 from functools import wraps
 
 import pymupdf
@@ -26,9 +27,9 @@ except ImportError:  # MCP SDK v2 also exposes these through mcp_types.
     from mcp_types import CallToolResult, ImageContent, TextContent
 
 try:  # MCP SDK v2
-    from mcp.server.mcpserver import MCPServer as _Server
+    from mcp.server.mcpserver import MCPServer as _Server, Context
 except ImportError:  # SDK v1
-    from mcp.server.fastmcp import FastMCP as _Server
+    from mcp.server.fastmcp import FastMCP as _Server, Context
 
 try:  # MCP SDK v2
     from mcp.server.mcpserver.exceptions import ToolError as _ToolError
@@ -36,7 +37,7 @@ except ImportError:  # MCP SDK v1
     from mcp.server.fastmcp.exceptions import ToolError as _ToolError
 
 from . import engine, pages as pages_mod, read, render, signature
-from .ops import OpError, operation_catalog
+from .ops import OpError, OCRError, operation_catalog
 
 mcp = _Server("omepreview")
 StrictNumber = StrictInt | StrictFloat
@@ -52,19 +53,40 @@ if hasattr(pymupdf, "FileDataError"):
     _EXPECTED_TOOL_ERRORS += (pymupdf.FileDataError,)
 
 
-def _tool_boundary(fn):
-    """Expose anticipated user/input failures without leaking unexpected crashes."""
-    @wraps(fn)
-    def wrapped(*args, **kwargs):
-        try:
-            return fn(*args, **kwargs)
-        except _EXPECTED_TOOL_ERRORS as exc:
-            raise _ToolError(str(exc)) from exc
-        except _ToolError:
-            raise
-        except Exception:
-            raise _ToolError(f"Error executing tool {fn.__name__}") from None
+def _ocr_error(exc):
+    data = {"error": {"code": exc.code, "message": str(exc), "ocr": exc.ocr},
+            "output": None, "applied": []}
+    content = [TextContent(type="text", text=json.dumps(data))]
+    if _supports_structured_result():
+        return CallToolResult(content=content, structuredContent=data, isError=True)
+    raise _ToolError(json.dumps(data)) from exc
 
+
+def _tool_boundary(fn):
+    """Expose anticipated input failures without leaking unexpected crashes."""
+    def failure(exc):
+        if isinstance(exc, OCRError):
+            return _ocr_error(exc)
+        if isinstance(exc, _EXPECTED_TOOL_ERRORS):
+            raise _ToolError(str(exc)) from exc
+        if isinstance(exc, _ToolError):
+            raise exc
+        raise _ToolError(f"Error executing tool {fn.__name__}") from None
+
+    if inspect.iscoroutinefunction(fn):
+        @wraps(fn)
+        async def wrapped(*args, **kwargs):
+            try:
+                return await fn(*args, **kwargs)
+            except Exception as exc:
+                return failure(exc)
+    else:
+        @wraps(fn)
+        def wrapped(*args, **kwargs):
+            try:
+                return fn(*args, **kwargs)
+            except Exception as exc:
+                return failure(exc)
     return wrapped
 
 
@@ -174,7 +196,6 @@ def list_form_fields(path: str) -> list[dict]:
     return read.form_fields(path)
 
 
-@_tool()
 def apply_ops(path: str, ops: list[dict], output: str | None = None, dry_run: StrictBool = True) -> dict:
     """Apply a list of operations in one atomic edit. The default is a dry run
     so a batch containing a consequential operation cannot write without an
@@ -187,6 +208,35 @@ def apply_ops(path: str, ops: list[dict], output: str | None = None, dry_run: St
             "Dry run only. Re-call with dry_run=false after the user approves."
         )
     return result
+
+
+@_tool(name="apply_ops")
+async def _apply_ops_request(path: str, ops: list[dict], ctx: Context,
+                             output: str | None = None, dry_run: StrictBool = True) -> dict:
+    """Apply operations; default preflight, explicit dry_run=false commits. OCR
+    needs an explicit new output and approved expected_source_sha256. OCR phase
+    progress uses the request token; cancellation/stdio EOF waits for cleanup.
+    Reopen the saved output with read_pdf/render_page before reporting success.
+    """
+    dry_run = _strict_bool(dry_run, "dry_run")
+    if not any(op.get("op") == "ocr" for op in ops):
+        return apply_ops(path, ops, output, dry_run)
+    from .mcp_ocr import run_owned
+    result = await run_owned(lambda cancel, progress: engine.apply(
+        path, ops, output=output, dry_run=dry_run, cancel_event=cancel, progress=progress), ctx)
+    if dry_run:
+        result["needs_confirmation"] = "Dry run only. Re-call with dry_run=false and the reviewed source hash after approval."
+    return result
+
+
+@_tool()
+async def ocr_status(ctx: Context) -> dict:
+    """Inspect optional OCR backend/version, executable and installed languages.
+    Read-only; unavailable dependencies return available=false and an action.
+    """
+    from .ocr import capabilities
+    from .mcp_ocr import run_owned
+    return await run_owned(lambda cancel, progress: capabilities(cancel_event=cancel, progress=progress), ctx)
 
 
 @_tool()
@@ -545,8 +595,17 @@ def run_workflow(name: str, arguments: dict | None = None) -> dict:
     return run(name, arguments)
 
 
+async def _run_stdio() -> None:
+    from mcp.server.stdio import stdio_server
+    from .mcp_ocr import EOFStream
+    server = mcp._lowlevel_server
+    async with stdio_server() as (reader, writer):
+        await server.run(EOFStream(reader), writer, server.create_initialization_options())
+
+
 def main() -> None:
-    mcp.run()
+    import anyio
+    anyio.run(_run_stdio)
 
 
 if __name__ == "__main__":
