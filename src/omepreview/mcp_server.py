@@ -60,6 +60,10 @@ def _tool_boundary(fn):
             return fn(*args, **kwargs)
         except _EXPECTED_TOOL_ERRORS as exc:
             raise _ToolError(str(exc)) from exc
+        except _ToolError:
+            raise
+        except Exception:
+            raise _ToolError(f"Error executing tool {fn.__name__}") from None
 
     return wrapped
 

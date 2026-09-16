@@ -118,6 +118,26 @@ def test_mcp_expected_errors_are_actionable_and_preserve_files(tmp_path):
                 )
                 assert "text 'NOT PRESENT' not found on page 1" in _error_text(dry_run_result)
 
+        injected_server = (
+            "from omepreview import mcp_server\n"
+            "@mcp_server._tool()\n"
+            "def injected_unexpected():\n"
+            "    raise RuntimeError('secret-internal')\n"
+            "mcp_server.mcp.run()\n"
+        )
+        injected_params = StdioServerParameters(
+            command=sys.executable,
+            args=["-c", injected_server],
+            env=dict(os.environ),
+        )
+        async with stdio_client(injected_params) as (read_stream, write_stream):
+            async with ClientSession(read_stream, write_stream) as session:
+                await session.initialize()
+                unexpected = await session.call_tool("injected_unexpected", {})
+                message = _error_text(unexpected)
+                assert "Error executing tool injected_unexpected" in message
+                assert "secret-internal" not in message
+
     asyncio.run(check_protocol())
     assert source.read_bytes() == before
     assert sentinel.read_bytes() == b"sentinel"
