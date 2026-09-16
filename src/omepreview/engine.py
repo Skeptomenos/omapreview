@@ -11,9 +11,10 @@ from __future__ import annotations
 import datetime
 import os
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from threading import Event
 
 import pymupdf
 
@@ -844,7 +845,10 @@ def apply(
     pdf: str | Path,
     op_list: list[dict],
     output: str | Path | None = None,
-    dry_run: bool = False,
+    dry_run: bool | None = None,
+    *,
+    cancel_event: Event | None = None,
+    progress: Callable[[dict], None] | None = None,
 ) -> dict:
     """Validate and apply ops to `pdf`, writing `output` (default: in place).
 
@@ -852,6 +856,16 @@ def apply(
     With dry_run=True nothing is written; the report still resolves geometry
     (text matches, signature rects) so callers can preview placements.
     """
+    if isinstance(op_list, list) and any(isinstance(op, dict) and op.get("op") == "ocr" for op in op_list):
+        from .ocr import execute
+        if dry_run is None:
+            raise ops_mod.OCRError("confirmation_required", "OCR requires explicit dry_run=True preflight or dry_run=False with the approved source hash")
+        if not isinstance(dry_run, bool):
+            raise ops_mod.OCRError("invalid_request", "OCR dry_run must be a boolean")
+        if len(op_list) != 1:
+            raise ops_mod.OCRError("invalid_request", "OCR must be the only operation; OCR a copy, verify it, then apply other edits")
+        return execute(pdf, ops_mod.validate(op_list[0]), output, dry_run=dry_run,
+                       cancel_event=cancel_event, progress=progress)
     input_path = _absolute_path(pdf)
     if not input_path.is_file():
         raise FileNotFoundError(f"no such PDF: {input_path}")

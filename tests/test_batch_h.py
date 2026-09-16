@@ -260,6 +260,7 @@ def test_operation_catalog_covers_authoritative_types_and_bounds():
         "delete_annotation": {"op", "page", "index"},
         "shape": {"op", "page", "shape", "from", "to", "rect", "color", "width"},
         "crop_pages": {"op", "pages", "rect"},
+        "ocr": {"op", "pages", "languages", "expected_source_sha256", "timeout_seconds"},
     }
 
     for entry in catalog["operations"]:
@@ -542,10 +543,15 @@ def test_cli_journey_and_consequential_confirmation(tmp_path, monkeypatch):
     (run_dir / "saved-render.png").write_bytes(png.read_bytes())
 
 
-@pytest.mark.parametrize("operation", OP_TYPES)
+# OCR refuses this legacy form fixture; test_ocr_engine owns its separate corpus.
+LEGACY_OPERATION_TYPES = tuple(name for name in OP_TYPES if name != "ocr")
+
+
+@pytest.mark.parametrize("operation", LEGACY_OPERATION_TYPES)
 def test_generic_cli_operation_has_saved_observation(tmp_path, monkeypatch, operation):
     _make_signature(tmp_path, monkeypatch)
     cases = {name: (op, target) for name, op, target in _operation_cases(tmp_path)}
+    assert set(cases) | {"ocr"} == set(OP_TYPES)
     op, special_target = cases[operation]
     source = _make_pdf(
         tmp_path / f"{operation}-source.pdf", annotation=operation == "delete_annotation"
@@ -797,7 +803,9 @@ def test_mcp_generic_operations_have_saved_observation(tmp_path, monkeypatch):
                     observed_names.append(name)
                 return observed_names
 
-    assert asyncio.run(run_all()) == list(OP_TYPES)
+    observed = asyncio.run(run_all())
+    assert observed == list(LEGACY_OPERATION_TYPES)
+    assert set(observed) | {"ocr"} == set(OP_TYPES)
 
 
 def test_mcp_insert_blank_and_image_variants_have_saved_observations(tmp_path):

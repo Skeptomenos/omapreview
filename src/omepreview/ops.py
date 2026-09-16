@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import copy
 import math
+import re
 
 MARKUP_STYLES = ("highlight", "underline", "strikeout", "squiggly")
 SHAPE_TYPES = ("line", "arrow", "rect", "oval")
@@ -43,6 +44,7 @@ OP_TYPES = (
     "delete_annotation",
     "shape",
     "crop_pages",
+    "ocr",
 )
 
 _ROTATE_DEGREES = (90, 180, 270, -90)
@@ -228,6 +230,28 @@ OPERATION_CATALOG = {
 }
 
 
+OPERATION_CATALOG["ocr"] = {'required': ['op'],
+ 'fields': {'op': {'const': 'ocr'},
+            'pages': {'type': 'array',
+                      'items': {'type': 'integer', 'minimum': 1},
+                      'minItems': 1,
+                      'uniqueItems': True},
+            'languages': {'type': 'array',
+                          'items': {'type': 'string',
+                                    'pattern': '^[A-Za-z0-9_]+(?:/[A-Za-z0-9_]+)?$'},
+                          'minItems': 1,
+                          'uniqueItems': True},
+            'expected_source_sha256': {'type': 'string', 'pattern': '^[0-9a-f]{64}$'},
+            'timeout_seconds': {'type': 'integer', 'minimum': 1, 'maximum': 3600}},
+ 'defaults': {'languages': ['eng'], 'timeout_seconds': 300},
+ 'examples': [{'op': 'ocr', 'pages': [1, 3], 'languages': ['eng']}],
+ 'constraints': ['Exactly one op per batch',
+                 'Explicit new output via apply(output=...)',
+                 'Unknown keys rejected',
+                 'Omitted pages means all; preserve document order',
+                 'expected_source_sha256 required for execution, returned by preflight']}
+
+
 def operation_catalog() -> dict:
     """Return a detached, JSON-safe catalog of every supported operation."""
     return {
@@ -256,6 +280,15 @@ def operation_catalog() -> dict:
 
 class OpError(ValueError):
     """An operation failed validation or could not be applied."""
+
+
+class OCRError(OpError):
+    """An OCR failure with a stable machine-readable code and optional report."""
+
+    def __init__(self, code: str, message: str, ocr: dict | None = None):
+        super().__init__(message)
+        self.code = code
+        self.ocr = ocr
 
 
 def _require(op: dict, key: str):
@@ -331,7 +364,31 @@ def validate(op: dict) -> dict:
         raise OpError(f"unknown op {kind!r}; valid ops: {', '.join(OP_TYPES)}")
     out = dict(op)
 
-    if kind == "highlight":
+    if kind == "ocr":
+        try:
+            unknown = set(op) - set(OPERATION_CATALOG["ocr"]["fields"])
+            if unknown:
+                raise OpError(f"Unsupported OCR options: {', '.join(map(str, sorted(unknown, key=str)))}; use the operation catalog")
+            if "pages" in op:
+                out["pages"] = sorted(_page_list(op["pages"]))
+                if len(set(out["pages"])) != len(out["pages"]):
+                    raise OpError("OCR pages must not contain duplicates")
+            languages = op.get("languages", ["eng"])
+            if (not isinstance(languages, list) or not languages
+                    or any(not isinstance(v, str) or not re.fullmatch(r"[A-Za-z0-9_]+(?:/[A-Za-z0-9_]+)?", v) for v in languages)
+                    or len(set(languages)) != len(languages) or languages == ["osd"]):
+                raise OpError("OCR languages must be unique installed language identifiers; osd alone cannot recognize text")
+            out["languages"] = list(languages)
+            timeout = op.get("timeout_seconds", 300)
+            if isinstance(timeout, bool) or not isinstance(timeout, int) or not 1 <= timeout <= 3600:
+                raise OpError("OCR timeout_seconds must be an integer from 1 to 3600")
+            out["timeout_seconds"] = timeout
+            if "expected_source_sha256" in op and (not isinstance(op["expected_source_sha256"], str) or not re.fullmatch("[0-9a-f]{64}", op["expected_source_sha256"])):
+                raise OpError("OCR expected_source_sha256 must be the lowercase SHA-256 returned by preflight")
+        except OpError as exc:
+            raise OCRError("invalid_request", str(exc)) from exc
+
+    elif kind == "highlight":
         _require(op, "page")
         if ("match" in op) == ("rect" in op):
             raise OpError("highlight needs exactly one of 'match' or 'rect'")

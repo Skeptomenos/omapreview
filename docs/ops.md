@@ -231,6 +231,100 @@ Does not auto-trim content to ink bounds; repeated crops stack in page space.
 Report: `{ "pages": [...], "rect": [...], "resolved": [{ "page", "cropbox",
 "size_before", "size_after" }, ...] }`.
 
+### ocr
+
+```json
+{"op": "ocr", "pages": [1, 3], "languages": ["eng"], "timeout_seconds": 300}
+```
+
+Creates a searchable **new copy** through the shared engine. OCR must be the only
+operation in the batch. Supply `apply(output=...)`; no op-local output field is
+accepted. The destination must not exist, even as a dangling symlink. Source
+aliases and racing destination files are refused. Pages default to all pages;
+selected pages are sorted into document order. Languages default to `eng` and
+retain their requested order. They must exactly match installed Tesseract data.
+Unknown options, duplicates, invalid page numbers and `osd` alone are errors.
+
+Python callers must explicitly choose preflight or execution:
+
+```python
+proposal = apply(source, [{"op": "ocr"}], output=new_copy, dry_run=True)
+source_hash = proposal["applied"][0]["ocr"]["source_sha256"]
+result = apply(source, [{"op": "ocr", "expected_source_sha256": source_hash}],
+               output=new_copy, dry_run=False)
+```
+
+Preflight reads the source and runs bounded dependency queries. It creates no
+staging or output and does not recognize text. A write requires the approved
+source hash and explicit `dry_run=False`. Ordinary operations keep their existing
+omitted-`dry_run` behavior. OCR supports keyword-only `cancel_event` and `progress`
+hooks on `engine.apply`. Progress events contain `phase`, `completed` (0–5), and
+`total` (5). They describe phases, not page percentages. Callbacks must return
+promptly; callback exceptions are ignored. OCR work belongs off the GUI thread.
+
+`omepreview.ocr.capabilities()` reports backend availability, selected executable
+and interpreter, versions, installed languages, and an actionable failure code.
+It imports no optional package. Discovery selects `OMAPREVIEW_OCRMYPDF`, then the
+app interpreter's sibling executable, then PATH. An invalid explicit selection
+never falls back. The accepted range is OCRmyPDF `>=17.11.0,<17.12`; only 17.11.0
+has been tested here. The selected launcher must identify its absolute Python
+interpreter. Queries use that interpreter for package metadata. This Linux route
+explicitly selects Ghostscript and reports its version. Each dependency query is
+bounded to 10 seconds. `ocr.preflight(source, op, output, ...)` returns the same
+proposal envelope as `apply(..., dry_run=True)`.
+
+The whole document must pass eligibility checks. Version one refuses encryption,
+signature structures (including empty fields), pending redactions, forms, links,
+annotations, attachments, active/tagged structures and rich/external outlines.
+Info metadata is limited to an indirect dictionary containing direct string
+values for Title, Author, Subject, Keywords, Creator, Producer, CreationDate and
+ModDate. Custom keys, indirect values, other value kinds and direct Info
+dictionaries are refused before staging. Full XMP is restored and compared.
+It also refuses malformed boxes, non-unit UserUnit, nonzero MediaBox origins and
+unsupported rotations. Refusal identifies the page or object where possible.
+See [the frozen acceptance contract](ocr-contract.md) for scope and coordinates.
+
+Selected pages with usable text are skipped. Mixed pages report
+`scanned_regions_not_processed=true`. Unselected pages retain their positions.
+Metadata rotation is normalized only in the disposable snapshot, then restored.
+There is no force/redo, deskew, automatic pixel rotation, cleanup or PDF/A mode.
+Before publication the engine reopens the staged copy and compares all page boxes,
+rotations, exact 100-DPI RGB renders, embedded image pixels/resolution/placement,
+protected text, word bounds, Info/XMP,
+internal outlines and page labels. Any mismatch prevents publication.
+
+The usual `{output, applied}` envelope adds `applied[0].ocr`. It contains `status`,
+source/output SHA-256, absolute `destination`, `dependencies`, `pages`,
+`recognized_pages`, `verification`, `warnings`, and execution `resources`.
+Every page reports `page`, `selected`, `status`, `reason`, `text_before_chars`,
+`text_after_chars`, `word_count`, and `review_required`. Preflight never reports
+`processed`. New usable text and passing preservation gates mean `processed`,
+always with `review_required=true`; this does not certify accurate transcription.
+Nonblank pages with no new text are `needs_review/no_text`. No confidence score or
+page timeout is inferred from backend prose. A blank/skipped-only copy has zero
+recognized pages. `OCRError` extends `OpError` with stable `code` and optional
+`ocr` report; error codes are listed in [the machine contract](ocr-contract.json).
+
+Execution admits at most 100 pages, 500 MiB input, and 100 MP source/verification
+rasters. The backend uses two jobs and a 30-second Tesseract page limit. Total
+`timeout_seconds` defaults to 300 and accepts 1–3600. Worker processes inherit
+limits of 4 GiB address space, 2 GiB per file, 256 descriptors and bounded CPU time.
+Temporary usage is sampled every 50 ms against 2 GiB: **this is not a hard disk
+quota**. The 100 MP OCR image setting limits the recognition image; backend raster
+allocation is also bounded by worker address space. Parent PyMuPDF native calls
+are not interruptible within one call. Cancellation/deadline checks run between
+bounded reads, pages and native calls. Reported RSS/temp peaks are samples.
+
+The worker has a private process group, a 0700 staging directory and private
+TMPDIR. Cancel/error/timeout sends TERM, then KILL after at most two seconds, reaps
+the child and checks for live group members. Staging is removed. Saved copies are
+0600 and published through atomic no-clobber hard-link creation on the destination
+filesystem. Cancellation after publication returns the completed result. A cleanup
+failure after publication adds a warning and retains the saved result. Parent
+SIGKILL cannot guarantee cleanup. Source identity and hash are checked again just
+before publication; this detects conflicts but does not lock out unrelated writers
+that act after the final check. Filesystems without hard-link support fail safely.
+
 ### rotate_pages
 ```json
 {"op": "rotate_pages", "pages": [2, 3], "degrees": 90}
