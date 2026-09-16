@@ -17,3 +17,5 @@ curl -fsSL https://github.com/Skeptomenos/omapreview/releases/download/v0.1.1/in
 - [Progressive agent skill](skill/SKILL.md) defines the shipped independent CLI/MCP modes, scenario recipes, and fresh-context validation.
 - Before scoping review fixes: [review recheck, 2026-09-15](docs/evidence/review-recheck-2026-09-15.md) records which R01–R26 findings reproduce at `784d158` and the recommended work boundaries.
 - Before dispatching or continuing review work: every conversation reads and updates the [single shared plan](/home/david/.local/state/omapreview/coordination/review-remediation.md), outside all worktrees. It owns waves, batch scopes, independent GUI/CLI/MCP validation, progress and the conflict-safe update protocol.
+
+- Before performance work: [R23 measurements, 2026-09-16](docs/evidence/batch-g-r23-2026-09-16.md) records thumbnail, search, page-operation, history-memory and recorder probes, with the next bounded improvement.
