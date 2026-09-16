@@ -1,0 +1,31 @@
+{
+  "status": "O0 implementation contract; not a shipped operation",
+  "catalog": {
+    "ocr": {
+      "required": ["op"],
+      "fields": {
+        "op": {"const": "ocr"},
+        "pages": {"type": "array", "items": {"type": "integer", "minimum": 1}, "minItems": 1, "uniqueItems": true},
+        "languages": {"type": "array", "items": {"type": "string", "pattern": "^[A-Za-z0-9_]+(?:/[A-Za-z0-9_]+)?$"}, "minItems": 1, "uniqueItems": true},
+        "expected_source_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 3600}
+      },
+      "defaults": {"languages": ["eng"], "timeout_seconds": 300},
+      "examples": [{"op": "ocr", "pages": [1, 3], "languages": ["eng"]}],
+      "constraints": ["Exactly one op per batch", "Explicit new output via apply(output=...)", "Unknown keys rejected", "Omitted pages means all; preserve document order", "expected_source_sha256 required for execution, returned by preflight"]
+    }
+  },
+  "page_statuses": ["eligible", "processed", "skipped", "blank", "needs_review", "failed", "cancelled"],
+  "skip_reasons": ["not_selected", "existing_text"],
+  "error_codes": ["invalid_request", "confirmation_required", "source_conflict", "destination_conflict", "dependency_missing", "dependency_unsupported", "language_missing", "encrypted", "signature_structure", "pending_redactions", "unsupported_content", "unsupported_geometry", "worker_failed", "worker_timeout", "cancelled", "verification_failed", "publication_failed", "resource_limit"],
+  "phases": ["preflight", "staging", "recognizing", "verifying", "publishing", "complete"],
+  "request_vectors": [
+    {"name": "all_eng_preflight", "ops": [{"op": "ocr"}], "output": "searchable.pdf", "dry_run": true, "expected": "preflight"},
+    {"name": "selected_languages", "ops": [{"op": "ocr", "pages": [1, 3], "languages": ["eng", "deu"]}], "output": "searchable.pdf", "dry_run": true, "expected": "language_missing_when_deu_absent"},
+    {"name": "mixed_batch", "ops": [{"op": "ocr"}, {"op": "rotate_pages", "pages": [1], "degrees": 90}], "output": "searchable.pdf", "dry_run": true, "expected": "invalid_request"},
+    {"name": "no_output", "ops": [{"op": "ocr"}], "dry_run": true, "expected": "destination_conflict"},
+    {"name": "empty_pages", "ops": [{"op": "ocr", "pages": []}], "output": "searchable.pdf", "dry_run": true, "expected": "invalid_request"},
+    {"name": "boolean_page", "ops": [{"op": "ocr", "pages": [true]}], "output": "searchable.pdf", "dry_run": true, "expected": "invalid_request"},
+    {"name": "no_source_binding", "ops": [{"op": "ocr"}], "output": "searchable.pdf", "dry_run": false, "expected": "confirmation_required"}
+  ]
+}
