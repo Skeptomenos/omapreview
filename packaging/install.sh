@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Visitor install for omapreview 0.1.1 (no git clone of the app repo).
-# Arch / Omarchy: pacman deps, GitHub tag tarball, ~/.local command + desktop.
+# Arch / Omarchy: pacman deps, GitHub release asset, ~/.local command + desktop.
 #
 #   curl -fsSL https://github.com/Skeptomenos/omapreview/releases/download/v0.1.1/install.sh | bash
 set -euo pipefail
