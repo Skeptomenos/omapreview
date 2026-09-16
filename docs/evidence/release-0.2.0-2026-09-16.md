@@ -31,7 +31,7 @@ Native installed GUI launch through Cua displayed the empty editor, Open PDF and
 ## Limits and follow-up
 
 - Empty-canvas tooltip lookup emits a nonfatal `no PDF open` traceback. [DEV-198](https://linear.app/helmus/issue/DEV-198/guard-empty-editor-tooltip-before-page-lookup) tracks the missing early document guard. This is not a clean GUI-log result.
-- A Cua background Open PDF action did not establish a file-dialog postcondition. No installed Open-dialog interaction is claimed. Cua refused background/foreground close input on this desktop and rejected termination as foreign-process ownership. One empty validation window (PID 883340 at capture time) remains open. No shell UI workaround was used.
+- A Cua background Open PDF action did not establish a file-dialog postcondition. No installed Open-dialog interaction is claimed. Cua refused background/foreground close input on this desktop and rejected termination as foreign-process ownership. Stopping the Cua service then removed its validation processes (PIDs 883338 and 883340); process readback confirmed both gone. No validation window remains. No shell UI workaround was used.
 - OCR accuracy still requires review. Synthetic acceptance does not certify arbitrary scans.
 
 ## Artifact hashes
