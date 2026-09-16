@@ -14,10 +14,10 @@ omapreview read filled.pdf --json
 omapreview snapshot filled.pdf --page 1 -o filled.png
 ```
 
-If a requested field is absent, repeated without a unique target, or is not an
-AcroForm field, stop and report the ambiguity. When the live operation catalog
-offers `page` and `rect` selectors, use them to narrow a repeated field to one
-widget; otherwise stop rather than selecting the first match. Use a `text_box`
+If a requested field is absent or is not an AcroForm field, stop and report it.
+For repeated names, pass `--page N` and/or `--rect X0,Y0,X1,Y1` to select one
+widget. Page is 1-based. Rect matching uses exact widget geometry within 0.01
+points. Zero or multiple matches is an actionable refusal. Use a `text_box`
 only when the user supplies placement facts and accepts visible text rather
 than a form value. Verify field name/value/page and rendered appearance in the
 saved file.
@@ -25,12 +25,12 @@ saved file.
 ## MCP route: forms
 
 Call `list_form_fields`, inspect name/type/page/rect/value, then call
-`fill_field` only for an actual unique field. When its schema exposes `page`
-and `rect`, pass the 1-based page and exact widget rectangle for a repeated
-name; an unresolved ambiguity is a refusal. For a proposal, use `apply_ops`
-with `fill_field` and `dry_run=true`, then commit once with `dry_run=false`.
-Reread the exact output with `read_pdf` and render the field's page. Never
-select the first repeated field by position alone.
+`fill_field(path, field, value, page=None, rect=None, output=None)` for the
+intended widget. For a repeated name, pass the 1-based page and/or exact rect;
+zero or multiple matches is an actionable refusal. For a proposal, use
+`apply_ops` with `fill_field` and `dry_run=true`, then commit once with
+`dry_run=false`. Reread the exact output with `read_pdf` and render the field's
+page. Never select the first repeated field by position alone.
 
 ## CLI route: signatures
 

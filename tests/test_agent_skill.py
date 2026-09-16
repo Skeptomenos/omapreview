@@ -56,6 +56,9 @@ def test_skill_is_small_portable_and_progressively_disclosed(tmp_path):
         body = path.read_text(encoding="utf-8")
         assert "/home/" not in body, reference
         assert "../" not in body, reference
+    forms = (SKILL / "references" / "forms-signatures.md").read_text(encoding="utf-8")
+    assert "--page N" in forms and "--rect X0,Y0,X1,Y1" in forms
+    assert "0.01" in forms and "when the live operation catalog offers" not in forms
     assert SCENARIOS <= {
         path.name for path in (SKILL / "references").glob("*.md")
     }
