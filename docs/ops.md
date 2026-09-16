@@ -410,8 +410,8 @@ The same authorized rectangle also **strips** intersecting sticky notes
 fields/values. Apply grows each rectangle to the glyph bboxes already
 substantially inside it (so a tight word-snap covers descenders) without
 taking neighbors that only graze the edge. On image-backed pages it also adds
-a bounded 0.75-point edge margin for antialiased scan fringes, capped at half
-the gap to a neighboring glyph. After save, verification reopens
+a bounded 0.75-point edge margin for antialiased scan fringes, limited to
+preserve neighboring glyphs, including diagonal neighbors. After save, verification reopens
 the serialized file and checks object payloads plus glyphs whose bbox is
 **substantially inside** the applied rectangle — not raw `get_textbox(clip)`,
 which reports the next line when Times-like word boxes overlap. A leftover
