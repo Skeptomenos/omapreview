@@ -529,7 +529,8 @@ def _ocr_completion_message(report: dict, output: str) -> str:
     recognized = report["recognized_pages"]
     title = "Saved searchable copy" if recognized and report["status"] == "complete" else "Saved OCR copy"
     parts = [f"{title}: {Path(output).name}.", f"{recognized} page(s) recognized."]
-    skipped = [str(page["page"]) for page in pages if page["status"] == "skipped"]
+    skipped = [f"{page['page']} ({page['reason']})" for page in pages
+               if page["status"] == "skipped"]
     review = [f"{page['page']} ({page['reason']})" for page in pages
               if page["status"] == "needs_review"]
     if skipped:
