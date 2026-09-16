@@ -16,10 +16,6 @@ for option in "$@"; do
 done
 
 VERSION="0.1.1"
-if [[ "${VERSION}" == "0.1.1" && "${with_ocr}" == true ]]; then
-  echo "omapreview install: published v0.1.1 has no OCR action. Use the current-source checkout installer with --with-ocr until an OCR release is published." >&2
-  exit 2
-fi
 # This release asset is built from the verified application tree so
 # Super+Space opens an empty editor without requiring a git clone.
 TARBALL_URL="https://github.com/Skeptomenos/omapreview/releases/download/v${VERSION}/omapreview-${VERSION}-src.tar.gz"
@@ -41,8 +37,18 @@ if ! command -v pacman >/dev/null 2>&1; then
   exit 1
 fi
 
-sudo pacman -S --needed --noconfirm \
-  gtk4 python python-pip python-hatchling python-gobject python-cairo python-pymupdf
+core_packages=(gtk4 python python-pip python-hatchling python-gobject python-cairo python-pymupdf)
+installed_packages="$(pacman -Qq)"
+missing_packages=()
+for package in "${core_packages[@]}"; do
+  case $'\n'"${installed_packages}"$'\n' in
+    *$'\n'"${package}"$'\n'*) ;;
+    *) missing_packages+=("${package}") ;;
+  esac
+done
+if (( ${#missing_packages[@]} )); then
+  sudo pacman -S --needed --noconfirm "${missing_packages[@]}"
+fi
 
 workdir="$(mktemp -d)"
 trap 'rm -rf "${workdir}"' EXIT
@@ -97,10 +103,6 @@ fi
 if command -v update-desktop-database >/dev/null 2>&1; then
   update-desktop-database "${APP_DIR}"
 fi
-if command -v omarchy-refresh-applications >/dev/null 2>&1; then
-  omarchy-refresh-applications
-fi
-
 case ":${PATH}:" in
   *":${BIN_DIR}:"*) ;;
   *) echo 'Terminal setup: export PATH="$HOME/.local/bin:$PATH" (current shell only).'
@@ -116,4 +118,10 @@ echo "If it is missing, run: omarchy restart shell"
 
 echo "Optional MCP: ${VENV}/bin/python -m pip install 'mcp>=2.2.0'"
 echo "Then launch: ${BIN_DIR}/omapreview-mcp (stdio; no checkout required)."
-echo "OCR is available from current source only; v0.1.1 has no OCR action."
+echo "Optional OCR: rerun this installer with --with-ocr."
+echo "OCR dependency/language status: ${BIN_DIR}/omapreview ocr-status"
+if [[ "${with_ocr}" == true ]]; then
+  "${exec_path}" ocr-status
+  echo "If OCR system tools or English data are missing, install tesseract, tesseract-data-eng and ghostscript yourself."
+  echo "Install other Tesseract language packs only when you need them, then recheck ocr-status."
+fi

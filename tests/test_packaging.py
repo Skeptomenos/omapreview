@@ -261,11 +261,154 @@ def test_ocr_is_an_independent_optional_extra_and_arch_metadata_matches():
     assert "ocrmypdf" not in srcinfo
 
 
-def test_release_installer_refuses_unshipped_ocr_before_system_changes():
-    installer = ROOT / "packaging/install.sh"
-    for args in (("--with-ocr",), ("--with-ocr", "--with-mcp")):
-        result = subprocess.run(
-            ["bash", str(installer), *args], text=True, capture_output=True, check=False
-        )
-        assert result.returncode == 2
-        assert "v0.1.1 has no OCR action" in result.stderr
+_INSTALLER_CORE_PACKAGES = (
+    "gtk4", "python", "python-pip", "python-hatchling", "python-gobject",
+    "python-cairo", "python-pymupdf",
+)
+
+
+def _run_release_installer(tmp_path, options=(), *, installed=None, sudo_exit=0, ocr_available=True):
+    """Run the installer against a synthetic asset and inert external commands."""
+    import io
+    import json
+    import os
+
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    script = (ROOT / "packaging/install.sh").read_text()
+    version = _one_match(r'^VERSION="([^"]+)"$', script, "installer version")
+    asset = tmp_path / "source.tar.gz"
+    with tarfile.open(asset, "w:gz") as archive:
+        for name, body in {
+            "pyproject.toml": '[project]\nname = "fixture"\n',
+            "share/omapreview.desktop": "[Desktop Entry]\nExec=omapreview edit %f\nTryExec=omapreview\n",
+        }.items():
+            payload = body.encode()
+            member = tarfile.TarInfo(f"omapreview-{version}/{name}")
+            member.size = len(payload)
+            archive.addfile(member, io.BytesIO(payload))
+
+    # Keep HOME unchanged. Redirect only the install tree, use the fixture's
+    # real checksum, and simulate an ordinary user for root-run CI as well.
+    local = tmp_path / "user-local"
+    script = script.replace("${HOME}/.local", str(local))
+    script = script.replace("[[ ${EUID} -eq 0 ]]", "[[ 1000 -eq 0 ]]")
+    script = re.sub(r'^TARBALL_SHA256="[0-9a-f]{64}"$',
+                    f'TARBALL_SHA256="{hashlib.sha256(asset.read_bytes()).hexdigest()}"',
+                    script, flags=re.MULTILINE)
+    installer = tmp_path / "install.sh"
+    installer.write_text(script)
+    commands = tmp_path / "commands.jsonl"
+    stubs = tmp_path / "stubs"
+    stubs.mkdir()
+    runner = stubs / "runner"
+    runner.write_text("#!" + sys.executable + "\n" + r'''
+import json, os, shutil, sys
+from pathlib import Path
+name = Path(sys.argv[0]).name
+args = sys.argv[1:]
+assert os.environ['HOME'] == os.environ['INSTALLER_TEST_ORIGINAL_HOME']
+with Path(os.environ['INSTALLER_TEST_COMMANDS']).open('a') as log:
+    log.write(json.dumps({'command': name, 'args': args}) + '\n')
+if name == 'pacman':
+    assert args == ['-Qq'], args
+    print(os.environ['INSTALLER_TEST_PACKAGES'])
+elif name == 'sudo':
+    assert args[:4] == ['pacman', '-S', '--needed', '--noconfirm'], args
+    sys.exit(int(os.environ['INSTALLER_TEST_SUDO_EXIT']))
+elif name == 'curl':
+    shutil.copyfile(os.environ['INSTALLER_TEST_ASSET'], args[args.index('-o') + 1])
+elif name in ('python3', 'python'):
+    if args[:2] == ['-m', 'venv']:
+        target = Path(args[-1]) / 'bin'
+        target.mkdir(parents=True, exist_ok=True)
+        for command in ('python', 'pip', 'omapreview', 'omepreview', 'omapreview-mcp', 'omepreview-mcp'):
+            link = target / command
+            if not link.exists():
+                link.symlink_to(os.environ['INSTALLER_TEST_RUNNER'])
+    else:
+        assert args == ['-m', 'pip', 'install', '--upgrade', 'pip'], args
+elif name == 'pip':
+    assert args[0] == 'install', args
+elif name == 'omapreview':
+    if args == ['--version']:
+        print('omapreview fixture')
+    else:
+        assert args == ['ocr-status'], args
+        available = os.environ['INSTALLER_TEST_OCR_AVAILABLE'] == '1'
+        print(json.dumps({'available': available, 'languages': ['eng'] if available else [],
+                          'code': None if available else 'dependency_missing'}))
+else:
+    assert name in ('gtk-update-icon-cache', 'update-desktop-database', 'omarchy-refresh-applications'), name
+''')
+    runner.chmod(0o755)
+    for name in ("pacman", "sudo", "curl", "python3", "python", "gtk-update-icon-cache",
+                 "update-desktop-database", "omarchy-refresh-applications"):
+        (stubs / name).symlink_to(runner)
+    temporary = tmp_path / "temporary"
+    temporary.mkdir()
+    env = {
+        **os.environ,
+        "PATH": str(stubs) + os.pathsep + os.environ.get("PATH", os.defpath),
+        "TMPDIR": str(temporary),
+        "INSTALLER_TEST_ORIGINAL_HOME": os.environ["HOME"],
+        "INSTALLER_TEST_COMMANDS": str(commands),
+        "INSTALLER_TEST_PACKAGES": "\n".join(_INSTALLER_CORE_PACKAGES if installed is None else installed),
+        "INSTALLER_TEST_SUDO_EXIT": str(sudo_exit),
+        "INSTALLER_TEST_ASSET": str(asset),
+        "INSTALLER_TEST_RUNNER": str(runner),
+        "INSTALLER_TEST_OCR_AVAILABLE": "1" if ocr_available else "0",
+    }
+    result = subprocess.run(["bash", str(installer), *options], env=env, text=True,
+                            capture_output=True, check=False, timeout=20)
+    calls = [json.loads(line) for line in commands.read_text().splitlines()]
+    return result, calls, local
+
+
+def test_release_installer_selects_independent_extras_without_sudo(tmp_path):
+    for index, (options, suffix) in enumerate((
+        ((), ""), (("--with-mcp",), "[mcp]"), (("--with-ocr",), "[ocr]"),
+        (("--with-ocr", "--with-mcp"), "[ocr,mcp]"),
+    )):
+        result, calls, local = _run_release_installer(tmp_path / str(index), options)
+        assert result.returncode == 0, result.stderr
+        assert calls[0] == {"command": "pacman", "args": ["-Qq"]}
+        assert not any(call["command"] == "sudo" for call in calls)
+        assert not any(call["command"] == "omarchy-refresh-applications" for call in calls)
+        assert [call["args"] for call in calls if call["command"] == "pip"] == [
+            ["install", str(local / "share/omapreview/src") + suffix]
+        ]
+        status_calls = [call for call in calls if call["args"] == ["ocr-status"]]
+        assert len(status_calls) == int("--with-ocr" in options)
+        desktop = (local / "share/applications/omapreview.desktop").read_text()
+        assert f"Exec={local}/share/omapreview/venv/bin/omapreview edit %f" in desktop
+        assert (local / "bin/omapreview").is_symlink()
+        assert "v0.1.1 has no OCR action" not in result.stdout + result.stderr
+
+
+def test_release_installer_installs_only_missing_core_packages(tmp_path):
+    missing = {"python-cairo", "python-pymupdf"}
+    installed = [package for package in _INSTALLER_CORE_PACKAGES if package not in missing]
+    # Similar names must not count as the exact installed package.
+    installed.append("python-cairo-extra")
+    result, calls, _local = _run_release_installer(tmp_path, ("--with-ocr",), installed=installed)
+    assert result.returncode == 0, result.stderr
+    assert [call["args"] for call in calls if call["command"] == "sudo"] == [
+        ["pacman", "-S", "--needed", "--noconfirm", "python-cairo", "python-pymupdf"]
+    ]
+
+
+def test_release_installer_stops_if_missing_core_install_fails(tmp_path):
+    installed = [package for package in _INSTALLER_CORE_PACKAGES if package != "gtk4"]
+    result, calls, local = _run_release_installer(tmp_path, installed=installed, sudo_exit=1)
+    assert result.returncode == 1
+    assert [call["command"] for call in calls] == ["pacman", "sudo"]
+    assert not local.exists()
+
+
+def test_release_installer_reports_missing_ocr_dependencies_without_installing_them(tmp_path):
+    result, calls, _local = _run_release_installer(tmp_path, ("--with-ocr", "--with-mcp"),
+                                                 ocr_available=False)
+    assert result.returncode == 0, result.stderr
+    assert '"available": false' in result.stdout and '"languages": []' in result.stdout
+    assert "tesseract, tesseract-data-eng and ghostscript yourself" in result.stdout
+    assert not any(call["command"] == "sudo" for call in calls)
