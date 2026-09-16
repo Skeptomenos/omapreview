@@ -261,7 +261,7 @@ def test_worker_cancel_timeout_cleanup(tmp_path,monkeypatch):
 
 @pytest.mark.parametrize('exit_code', [0, 3])
 def test_real_backend_missing_output(tmp_path, exit_code):
-    backend=tmp_path/'backend';backend.write_text(f'#!/bin/sh\nexit {exit_code}\n');backend.chmod(0o700)
+    backend=tmp_path/'backend';backend.write_text('#!'+sys.executable+f'\nimport sys;sys.exit({exit_code})\n');backend.chmod(0o700)
     failure('worker_failed',lambda:ocr._run_worker({'executable':str(backend)},tmp_path/'in.pdf',tmp_path/'out.pdf',{'timeout_seconds':10,'languages':['eng'],'pages':[1]},tmp_path,ocr._Control(10,None,None),{'peak_temp_bytes_observed':0}))
 
 
@@ -328,8 +328,7 @@ def test_backend_versions_and_language_discovery(monkeypatch,tmp_path):
     backend=tmp_path/'backend';backend.write_text('#!'+sys.executable+'\n');backend.chmod(0o700)
     monkeypatch.setenv('OMAPREVIEW_OCRMYPDF',str(backend))
     def query(cmd,control):
-        if cmd[-1]=='--version':return '16.0.0'
-        return '16.0.0'
+        return json.dumps({'version':'16.0.0','plugins':[]})
     monkeypatch.setattr(ocr,'_query',query)
     assert ocr.capabilities()['code']=='dependency_unsupported'
 
@@ -405,7 +404,7 @@ def test_existing_protocol_routes(corpus,tmp_path,monkeypatch,surface,enabled):
 def test_missing_tesseract_version(monkeypatch,tmp_path,tesseract_version):
     backend=tmp_path/'backend';backend.write_text('#!'+sys.executable+'\n');backend.chmod(0o700)
     monkeypatch.setenv('OMAPREVIEW_OCRMYPDF',str(backend))
-    answers=iter(['17.11.0','17.11.0',tesseract_version])
+    answers=iter([json.dumps({'version':'17.11.0','plugins':[]}),tesseract_version])
     monkeypatch.setattr(ocr,'_query',lambda *a:next(answers))
     status=ocr.capabilities()
     assert not status['available'] and status['code']=='dependency_unsupported'
@@ -511,3 +510,85 @@ def test_query_drains_child_exit_race(monkeypatch):
     monkeypatch.setattr(ocr,'_readable',delayed_readiness)
     result=ocr._query([sys.executable,'-c','import time;time.sleep(.05);print("17.11.0")'])
     assert delayed and result=='17.11.0'
+
+
+@pytest.mark.parametrize('unselected', [False, True])
+def test_protected_hidden_text_geometry(tmp_path,monkeypatch,fake_backend,unselected):
+    source=tmp_path/'source.pdf';target=tmp_path/'copy.pdf'
+    with fitz.open() as doc:
+        if unselected:doc.new_page()
+        doc.new_page().insert_text((50,80),'PROTECTED OCR PHRASE',render_mode=3)
+        doc.save(source)
+    def move_text(_deps,staged,output,*args):
+        with fitz.open(staged) as doc:
+            for xref in doc[-1].get_contents():
+                doc.update_stream(xref,b'q\n1 0 0 1 150 -120 cm\n'+doc.xref_stream(xref)+b'\nQ')
+            doc.save(output)
+    monkeypatch.setattr(ocr,'_run_worker',move_text)
+    failure('verification_failed',lambda:request(source,target,**({'pages':[1]} if unselected else {})),target)
+
+
+def test_protected_text_tolerates_numeric_roundoff(tmp_path,monkeypatch,fake_backend):
+    source=tmp_path/'source.pdf';target=tmp_path/'copy.pdf'
+    with fitz.open() as doc:
+        doc.new_page().insert_text((50,80),'PROTECTED OCR PHRASE',render_mode=3);doc.save(source)
+    def roundoff(_deps,staged,output,*args):
+        with fitz.open(staged) as doc:
+            for xref in doc[0].get_contents():
+                doc.update_stream(xref,b'q\n1 0 0 1 0.0001 0.0001 cm\n'+doc.xref_stream(xref)+b'\nQ')
+            doc.save(output)
+    monkeypatch.setattr(ocr,'_run_worker',roundoff)
+    assert request(source,target)['applied'][0]['ocr']['verification']['protected_text_geometry_equal']
+
+
+def _install_synthetic_plugin(directory):
+    package=directory/'review_plugin-1.0.dist-info';package.mkdir()
+    (package/'METADATA').write_text('Metadata-Version: 2.1\nName: review-plugin\nVersion: 1.0\n')
+    (package/'entry_points.txt').write_text('[ocrmypdf]\nreview_probe = review_plugin\n')
+    marker=directory/'imported'
+    (directory/'review_plugin.py').write_text('from pathlib import Path\nPath('+repr(str(marker))+').write_text("plugin executed")\n')
+    return marker
+
+
+@pytest.mark.parametrize('late', [False,True])
+def test_external_plugins_refused_without_import(tmp_path,corpus,monkeypatch,late):
+    backend=os.environ.get('OMAPREVIEW_TEST_OCRMYPDF')
+    if not backend:pytest.skip('Set OMAPREVIEW_TEST_OCRMYPDF for real plugin isolation acceptance')
+    monkeypatch.setenv('OMAPREVIEW_OCRMYPDF',backend)
+    plugin_dir=tmp_path/'plugins';plugin_dir.mkdir()
+    monkeypatch.setenv('PYTHONPATH',str(plugin_dir))
+    marker=plugin_dir/'imported';target=tmp_path/'copy.pdf';source=corpus[0]/'fixtures/clean.pdf'
+    if not late:
+        _install_synthetic_plugin(plugin_dir)
+        status=ocr.capabilities()
+        assert not status['available'] and status['code']=='dependency_unsupported'
+        failure('dependency_unsupported',lambda:apply(source,[{'op':'ocr'}],output=target,dry_run=True),target)
+    else:
+        assert ocr.capabilities()['available']
+        def install_after_discovery(event):
+            if event['phase']=='recognizing':_install_synthetic_plugin(plugin_dir)
+        failure('dependency_unsupported',lambda:apply(source,[{'op':'ocr','expected_source_sha256':fingerprint(source)}],output=target,dry_run=False,progress=install_after_discovery),target)
+    assert not marker.exists(),'plugin module must never be imported'
+
+
+@pytest.mark.parametrize('body', [
+    'import sys\nopen(sys.argv[-1],"wb").truncate(3*1024**3)',
+    'import mmap\nmmap.mmap(-1,5*1024**3)',
+    'raise MemoryError("synthetic allocation failure")',
+])
+def test_confirmed_worker_resource_exceptions(tmp_path,body):
+    backend=tmp_path/'backend';backend.write_text('#!'+sys.executable+'\n'+body+'\n');backend.chmod(0o700)
+    failure('resource_limit',lambda:ocr._run_worker({'executable':str(backend)},tmp_path/'in.pdf',tmp_path/'out.pdf',{'timeout_seconds':10,'languages':['eng'],'pages':[1]},tmp_path,ocr._Control(10,None,None),{'peak_temp_bytes_observed':0}))
+
+
+def test_worker_retains_accepted_environment(tmp_path,corpus,monkeypatch):
+    backend=os.environ.get('OMAPREVIEW_TEST_OCRMYPDF')
+    if not backend:pytest.skip('Set OMAPREVIEW_TEST_OCRMYPDF for environment binding acceptance')
+    monkeypatch.setenv('OMAPREVIEW_OCRMYPDF',backend)
+    monkeypatch.setenv('PYTHONPATH','')
+    plugins=tmp_path/'plugins';plugins.mkdir();marker=_install_synthetic_plugin(plugins)
+    def change_ambient_environment(event):
+        if event['phase']=='recognizing':os.environ['PYTHONPATH']=str(plugins)
+    source=corpus[0]/'fixtures/native.pdf';target=tmp_path/'copy.pdf'
+    result=apply(source,[{'op':'ocr','expected_source_sha256':fingerprint(source)}],output=target,dry_run=False,progress=change_ambient_environment)
+    assert result['applied'][0]['ocr']['status']=='complete' and not marker.exists()

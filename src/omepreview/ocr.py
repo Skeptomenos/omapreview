@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from contextlib import ExitStack
 import hashlib
+import json
 import math
 import os
 from pathlib import Path
@@ -39,6 +40,7 @@ class _Control:
         self.deadline = time.monotonic() + seconds
         self.cancel_event = cancel_event
         self.progress = progress
+        self.environment = os.environ.copy()
 
     def check(self):
         if self.cancel_event is not None and self.cancel_event.is_set():
@@ -92,7 +94,8 @@ def _stop(process):
 def _query(command, control=None):
     """Bounded dependency query; cap output too, without creating files."""
     process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                               start_new_session=True)
+                               start_new_session=True,
+                               env=control.environment if control else None)
     assert process.stdout is not None
     os.set_blocking(process.stdout.fileno(), False)
     until = min(time.monotonic() + 10, control.deadline if control else float('inf'))
@@ -131,13 +134,15 @@ def capabilities(*, cancel_event=None, progress=None, _control=None):
     interpreter sibling, then PATH. Invalid explicit selection never falls back.
     """
     control = _control or _Control(60, cancel_event, progress)
-    explicit = os.environ.get('OMAPREVIEW_OCRMYPDF')
+    explicit = control.environment.get('OMAPREVIEW_OCRMYPDF')
+    search_path = control.environment.get('PATH', os.defpath)
     sibling = Path(sys.executable).absolute().with_name('ocrmypdf')
-    executable = explicit or (str(sibling) if sibling.is_file() else shutil.which('ocrmypdf'))
+    executable = explicit or (str(sibling) if sibling.is_file() else shutil.which('ocrmypdf', path=search_path))
     result = {"available": False, "executable": executable, "interpreter": None,
-              "version": None, "supported_range": SUPPORTED_RANGE,
+              "version": None, "version_source": "selected_interpreter_metadata",
+              "plugins": [], "supported_range": SUPPORTED_RANGE,
               "pymupdf_version": fitz.VersionBind, "tesseract": None,
-              "languages": [], "rasterizer": {"name": "ghostscript", "executable": shutil.which('gs'), "version": None},
+              "languages": [], "rasterizer": {"name": "ghostscript", "executable": shutil.which('gs', path=search_path), "version": None},
               "code": "dependency_missing", "action": "Install the optional OCR extra and Tesseract language data, then recheck OCR capabilities"}
     if sys.platform != 'linux':
         result.update(code="dependency_unsupported", action="This OCR route is accepted on Linux only; use an accepted Linux installation")
@@ -154,19 +159,29 @@ def capabilities(*, cancel_event=None, progress=None, _control=None):
         if not interpreter or not Path(interpreter).is_file() or not os.access(interpreter, os.X_OK):
             result.update(code='dependency_unsupported', action='OCR launcher must identify its absolute Python interpreter; reinstall the OCR extra in the application environment')
             return result
-        version = _query([executable, '--version'], control)
-        metadata_version = _query([interpreter, '-c', 'from importlib.metadata import version; print(version("ocrmypdf"))'], control)
-        if not version:
-            version = metadata_version
-        elif version.removeprefix('ocrmypdf ').strip() != metadata_version:
-            result.update(code='dependency_unsupported', action='OCR launcher and interpreter versions disagree; reinstall the OCR extra and recheck')
+        # OCRmyPDF auto-loads installed plugin entry points even for --version.
+        # Read distribution metadata before importing any backend/plugin module.
+        metadata_code = (
+            'import sys; sys.path[0] = sys.argv[1]; '
+            'import json; from importlib.metadata import version, entry_points; '
+            'print(json.dumps({"version":version("ocrmypdf"),'
+            '"plugins":[{"name":p.name,"value":p.value} for p in entry_points(group="ocrmypdf")]}))'
+        )
+        package = json.loads(_query([interpreter, '-c', metadata_code,
+                                    str(Path(executable).absolute().parent)], control))
+        if not isinstance(package, dict) or not isinstance(package.get('version'), str) or not isinstance(package.get('plugins'), list):
+            raise ValueError('Invalid backend metadata response')
+        result['plugins'] = package['plugins']
+        if package['plugins']:
+            result.update(code='dependency_unsupported', action='Third-party OCRmyPDF plugins are not supported; use a clean OCR environment and recheck')
             return result
+        version = package['version']
         match = re.fullmatch(r'(?:ocrmypdf\s+)?(\d+\.\d+\.\d+)', version, re.I)
         result['version'] = match.group(1) if match else None
         if not match or tuple(map(int, match.group(1).split('.')))[:2] != (17, 11):
             result.update(code='dependency_unsupported', action=f'Install OCRmyPDF {SUPPORTED_RANGE} and recheck its version')
             return result
-        tess = shutil.which('tesseract')
+        tess = shutil.which('tesseract', path=search_path)
         gs = result['rasterizer']['executable']
         if not tess or not gs:
             return result
@@ -432,14 +447,16 @@ def _rss_bytes(group):
 
 
 def _run_worker(deps, source, output, op, directory, control, metrics):
-    command = [sys.executable, str(Path(__file__).with_name('ocr_worker.py')),
-               deps['executable'], str(op['timeout_seconds']), '--mode', 'skip',
+    status_file = directory / 'worker-status.json'
+    command = [deps.get('interpreter') or sys.executable, str(Path(__file__).with_name('ocr_worker.py')),
+               deps['executable'], str(op['timeout_seconds']), deps.get('version', ''),
+               str(status_file), '--mode', 'skip',
                '--output-type', 'pdf', '--optimize', '0', '--jobs', '2',
                '--rasterizer', 'ghostscript', '--language', '+'.join(op['languages']),
                '--tesseract-timeout', '30', '--max-image-mpixels', '100',
                '--max-ocr-image-mpixels', '100', '--pages', ','.join(map(str, op['pages'])),
                str(source), str(output)]
-    env = os.environ.copy()
+    env = control.environment.copy()
     env.update(TMPDIR=str(directory), OMP_THREAD_LIMIT='1')
     # No backend logs are returned: they can contain document text or filenames.
     with (directory / 'worker.log').open('wb') as log:
@@ -455,6 +472,18 @@ def _run_worker(deps, source, output, op, directory, control, metrics):
                     raise OCRError('resource_limit', 'OCR temporary storage exceeded 2 GiB; use fewer pages')
                 time.sleep(.05)
             control.check()
+            if process.returncode in (90, 91) and status_file.is_file() and not status_file.is_symlink():
+                with status_file.open('rb') as status:
+                    payload = status.read(4097)
+                if len(payload) <= 4096:
+                    try:
+                        code = json.loads(payload).get('code')
+                    except (ValueError, AttributeError):
+                        code = None
+                    if process.returncode == 90 and code == 'resource_limit':
+                        raise OCRError(code, 'OCR worker reported memory or file-size exhaustion; use fewer pages')
+                    if process.returncode == 91 and code == 'dependency_unsupported':
+                        raise OCRError(code, 'OCR environment changed or contains third-party plugins; use a clean supported environment and recheck')
             if process.returncode in (-signal.SIGXCPU, -signal.SIGXFSZ):
                 raise OCRError('resource_limit', 'OCR worker exceeded a CPU or file-size limit; use fewer pages')
             if process.returncode:
@@ -498,6 +527,31 @@ def _restore(raw, target, original, control):
         raise OCRError('verification_failed', 'OCR backend produced an unreadable PDF; no copy was published') from exc
 
 
+TEXT_GEOMETRY_TOLERANCE = 0.01  # PDF points: below 0.014 pixel at verification DPI.
+
+
+def _text_geometry(page):
+    words = [(w[4], tuple(w[:4])) for w in page.get_text('words')]
+    spans = []
+    flags = fitz.TEXTFLAGS_DICT & ~fitz.TEXT_PRESERVE_IMAGES
+    for block in page.get_text('dict', flags=flags)['blocks']:
+        for line in block.get('lines', []):
+            for span in line['spans']:
+                spans.append((span['text'], (*span['bbox'], *span['origin'], *line['dir'])))
+    return words, spans
+
+
+def _same_text_geometry(before, after):
+    for left, right in zip(_text_geometry(before), _text_geometry(after)):
+        if len(left) != len(right):
+            return False
+        for (text_a, coords_a), (text_b, coords_b) in zip(left, right):
+            if text_a != text_b or any(not math.isclose(a, b, rel_tol=0, abs_tol=TEXT_GEOMETRY_TOLERANCE)
+                                      for a, b in zip(coords_a, coords_b)):
+                return False
+    return True
+
+
 def _verify(original, staged, pages, control):
     with fitz.open(staged) as after:
         try:
@@ -526,8 +580,8 @@ def _verify(original, staged, pages, control):
             bounds = fitz.Rect(0, 0, b.cropbox.width, b.cropbox.height)
             if any(not all(math.isfinite(v) for v in w[:4]) or not bounds.contains(fitz.Rect(w[:4])) for w in words):
                 raise OCRError('verification_failed', f'OCR text on page {a.number+1} has invalid coordinates; no copy was published')
-            if report['status'] in ('skipped', 'blank') and text != before:
-                raise OCRError('verification_failed', f'OCR changed protected text on page {a.number+1}; no copy was published')
+            if report['status'] in ('skipped', 'blank') and (text != before or not _same_text_geometry(a, b)):
+                raise OCRError('verification_failed', f'OCR changed protected text or its geometry on page {a.number+1}; no copy was published')
             report.update(text_after_chars=len(text), word_count=len(words))
             if report['status'] == 'eligible':
                 if _usable(text) and words:
@@ -546,6 +600,7 @@ def _verify(original, staged, pages, control):
             if images_before != images_after:
                 raise OCRError('verification_failed', f'OCR changed page {a.number+1} image pixels, resolution or placement; no copy was published')
     return {"geometry_equal": True, "renders_equal": True, "text_preserved": True,
+            "protected_text_geometry_equal": True, "text_geometry_tolerance_points": TEXT_GEOMETRY_TOLERANCE,
             "word_bounds_valid": True, "images_equal": True, "metadata_equal": True, "outlines_equal": True,
             "page_labels_equal": True, "dpi": VERIFY_DPI}
 

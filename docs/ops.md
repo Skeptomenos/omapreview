@@ -268,7 +268,11 @@ It imports no optional package. Discovery selects `OMAPREVIEW_OCRMYPDF`, then th
 app interpreter's sibling executable, then PATH. An invalid explicit selection
 never falls back. The accepted range is OCRmyPDF `>=17.11.0,<17.12`; only 17.11.0
 has been tested here. The selected launcher must identify its absolute Python
-interpreter. Queries use that interpreter for package metadata. This Linux route
+interpreter. Queries use that interpreter for package metadata before loading OCRmyPDF.
+Third-party `ocrmypdf` entry-point plugins are refused without import. The worker
+uses the request's captured environment and rechecks metadata/version/plugins
+before recognition; no PYTHONPATH setting is removed or rewritten. This is a
+request snapshot and a last check, not a lock against concurrent package changes. This Linux route
 explicitly selects Ghostscript and reports its version. Each dependency query is
 bounded to 10 seconds. `ocr.preflight(source, op, output, ...)` returns the same
 proposal envelope as `apply(..., dry_run=True)`.
@@ -290,8 +294,10 @@ Metadata rotation is normalized only in the disposable snapshot, then restored.
 There is no force/redo, deskew, automatic pixel rotation, cleanup or PDF/A mode.
 Before publication the engine reopens the staged copy and compares all page boxes,
 rotations, exact 100-DPI RGB renders, embedded image pixels/resolution/placement,
-protected text, word bounds, Info/XMP,
-internal outlines and page labels. Any mismatch prevents publication.
+protected text, word/span geometry and order, word bounds, Info/XMP,
+internal outlines and page labels. Any mismatch prevents publication. Protected text geometry allows at most 0.01
+PDF point of numeric drift (less than 0.014 pixel at 100 DPI); text and order must
+match. This also protects existing invisible OCR layers and unselected pages.
 
 The usual `{output, applied}` envelope adds `applied[0].ocr`. It contains `status`,
 source/output SHA-256, absolute `destination`, `dependencies`, `pages`,
@@ -309,6 +315,8 @@ Execution admits at most 100 pages, 500 MiB input, and 100 MP source/verificatio
 rasters. The backend uses two jobs and a 30-second Tesseract page limit. Total
 `timeout_seconds` defaults to 300 and accepts 1–3600. Worker processes inherit
 limits of 4 GiB address space, 2 GiB per file, 256 descriptors and bounded CPU time.
+Confirmed limit signals and launcher-boundary MemoryError/ENOMEM/EFBIG failures
+return `resource_limit`; opaque backend failures remain `worker_failed`.
 Temporary usage is sampled every 50 ms against 2 GiB: **this is not a hard disk
 quota**. The 100 MP OCR image setting limits the recognition image; backend raster
 allocation is also bounded by worker address space. Parent PyMuPDF native calls
@@ -544,7 +552,8 @@ Clipboard PDF payloads are limited to 64 MiB; Wayland uses wl-copy/wl-paste,
 X11 uses xclip. Missing helpers return actionable errors. A clipboard owner can
 be replaced by another app; inspect the final pasted artifact.
 
-Future OCR belongs in the shared operation schema/engine with its own documented
-execution contract. The recorder-specific handoff is not an OCR job framework.
+OCR uses the shared operation schema and engine contract above. Dedicated CLI/MCP
+lifecycle adapters and the GUI OCR task controls are separate adapter work. The
+recorder-specific handoff remains separate from OCR execution.
 
 Validation: [CLI/MCP workflow acceptance, 2026-09-16](evidence/full-interface-parity-2026-09-16.md).
