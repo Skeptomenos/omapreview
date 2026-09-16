@@ -118,6 +118,22 @@ The Arch package definitions keep the v0.1.1 source URL and checksum. They
 list the system OCR tools as optional guidance for a future OCR release; they
 do not install OCRmyPDF or enable OCR in v0.1.1.
 
+### Recognize text in the current-source editor
+
+Open a PDF, then choose **Recognize text** in the editor rail or press
+Ctrl+Shift+O. Choose pages, installed OCR languages, and a new PDF path.
+**Review** checks the saved source and shows the destination. **Recognize
+text** starts the approved request. The editor stays responsive and shows
+phase progress and Cancel. A verified copy opens automatically if the editor
+has not changed. If it has changed, the copy stays saved and **Open copy**
+lets you choose when to switch documents. Save, discard, or cancel pending
+edits before starting or opening the copy.
+
+The original is kept. Search the copy and review recognized text against the
+page image. OCR reports pages it skipped or could not recognize; it does not
+certify transcription accuracy. This editor action is in current source and
+is absent from the published v0.1.1 release.
+
 ## Make omapreview your default PDF editor
 
 After installing on Arch / Omarchy, run this as your normal user, without sudo:
@@ -144,6 +160,7 @@ default unchanged until you choose to change it.
 | Ctrl+S | Save pending ghosts through the engine |
 | Ctrl+Z / Ctrl+Shift+Z | Undo / redo, including saves |
 | Ctrl+F | Search |
+| Ctrl+Shift+O | Recognize text in a new copy (current source) |
 | F9 | Toggle thumbnails |
 | R | Redact tool |
 | Space / Enter (signature pad) | Arm and save a trackpad signature |

@@ -18,6 +18,101 @@ from .ops import OpError, validate_all
 MAX_MESSAGE = 1024 * 1024
 
 
+class OCRTask:
+    """One editor-owned OCR request. The worker never reads the GTK model."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._thread = None
+        self._cancel = threading.Event()
+        self._state = None
+
+    def snapshot(self, revision=None):
+        with self._lock:
+            if self._state is None:
+                return None
+            state = copy.deepcopy(self._state)
+        state["session_changed"] = revision is not None and revision != state["source_revision"]
+        return state
+
+    def start(self, source, op, output, source_revision):
+        with self._lock:
+            if self._thread is not None and self._thread.is_alive():
+                raise OpError("OCR is already running in this editor; inspect or cancel its task")
+            self._cancel = threading.Event()
+            self._state = {
+                "task_id": uuid.uuid4().hex, "status": "running", "phase": "queued",
+                "completed": 0, "total": 5, "destination": str(output),
+                "output": None, "result": None, "error": None,
+                "source_revision": source_revision,
+                "cancellation_requested": False,
+            }
+            self._thread = threading.Thread(
+                target=self._run, args=(str(source), copy.deepcopy(op), str(output)),
+                daemon=True, name="omapreview-ocr",
+            )
+            self._thread.start()
+        return self.snapshot(source_revision)
+
+    def _progress(self, event):
+        with self._lock:
+            if self._state is not None and self._state["status"] == "running":
+                self._state.update({key: event[key] for key in ("phase", "completed", "total") if key in event})
+
+    def _run(self, source, op, output):
+        from . import engine
+        from .ocr import OCRError
+        try:
+            proposal = engine.apply(source, [{key: value for key, value in op.items()
+                                              if key != "expected_source_sha256"}],
+                                    output=output, dry_run=True,
+                                    cancel_event=self._cancel, progress=self._progress)
+            approved = op["expected_source_sha256"]
+            observed = proposal["applied"][0]["ocr"]["source_sha256"]
+            if observed != approved:
+                raise OCRError("source_conflict", "OCR source changed since approval; inspect the document and run preflight again")
+            result = engine.apply(source, [op], output=output, dry_run=False,
+                                  cancel_event=self._cancel, progress=self._progress)
+            report = result["applied"][0]["ocr"]
+            published = Path(result["output"])
+            with self._lock:
+                self._state.update(output=str(published), result=result)
+            with published.open("rb") as handle:
+                digest = hashlib.file_digest(handle, "sha256").hexdigest()
+            if digest != report["output_sha256"]:
+                raise OpError("OCR copy changed after publication; inspect the saved file before opening it")
+            import pymupdf
+            with pymupdf.open(published) as doc:
+                if doc.page_count != len(report["pages"]):
+                    raise OpError("OCR copy page count changed after publication; inspect the saved file")
+            with self._lock:
+                self._state.update(status=report["status"], output=str(published),
+                                   result=result, phase="complete", completed=5)
+        except Exception as exc:
+            code = getattr(exc, "code", "verification_failed" if isinstance(exc, OpError) else "ocr_failed")
+            detail = {"code": code, "message": str(exc), "ocr": getattr(exc, "ocr", None)}
+            with self._lock:
+                self._state.update(
+                    status={"cancelled": "cancelled", "worker_timeout": "timed_out"}.get(code, "failed"),
+                    error=detail,
+                )
+
+    def cancel(self, task_id=None):
+        with self._lock:
+            if self._state is None or (task_id is not None and task_id != self._state["task_id"]):
+                raise OpError("OCR task not found in this editor; read editor status")
+            if self._state["status"] == "running":
+                self._state["status"] = "cancelling"
+                self._state["cancellation_requested"] = True
+                self._cancel.set()
+
+    def join(self, timeout=None):
+        thread = self._thread
+        if thread is not None:
+            thread.join(timeout)
+        return thread is None or not thread.is_alive()
+
+
 def directory():
     root = scratch_dir() / "sessions"
     # AF_UNIX has a 108-byte pathname limit on Linux. Preserve namespace
@@ -131,6 +226,7 @@ class Bridge:
         self.refresh = refresh
         self.close_window = close
         self.session = session or uuid.uuid4().hex
+        self.ocr_task = OCRTask()
         self.path = _path(self.session)
         self.sock = socket.socket(socket.AF_UNIX)
         self.sock.bind(str(self.path))
@@ -142,6 +238,8 @@ class Bridge:
         self.thread.start()
 
     def close(self):
+        if self.ocr_task.snapshot() is not None:
+            self.ocr_task.cancel()
         self.stopped.set()
         self.sock.close()
         self.path.unlink(missing_ok=True)
@@ -191,6 +289,7 @@ class Bridge:
         pending = ed.to_ops(execution_order=False) if ed.has_document() else []
         body = {"session": self.session, "pid": os.getpid(), "path": ed.path,
                 "source_fingerprint": ed._source_fingerprint,
+                "document_epoch": ed._document_epoch,
                 "pending": pending, "page_ops": copy.deepcopy(ed.page_preview.page_ops),
                 "undo_depth": len(ed.undo_stack), "redo_depth": len(ed.redo_stack),
                 "page": ed.page_no + 1 if ed.has_document() else None, "page_count": ed.page_count(),
@@ -198,7 +297,30 @@ class Bridge:
                 "selected_index": next((i for i, item in enumerate(ed.pending) if item is ed.selected), None),
                 "dirty": bool(ed.pending or ed.page_preview.has_changes())}
         body["revision"] = hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()
+        body["ocr"] = self.ocr_task.snapshot(body["revision"])
         return body
+
+    def start_ocr(self, op, output, *, revision, confirm):
+        state = self.status()
+        ed = self.editor
+        if state["revision"] != revision:
+            raise OpError("editor revision changed; read status and review the document before OCR")
+        if confirm is not True:
+            return {"status": "needs_confirmation", "action": "ocr_start", **state}
+        if not ed.has_document():
+            raise OpError("open a PDF before recognizing text")
+        if state["dirty"]:
+            raise OpError("save or discard pending edits before recognizing text")
+        if ed.external_conflict:
+            raise OpError("source changed on disk; reopen it before recognizing text")
+        if not isinstance(output, str) or not output or not Path(output).is_absolute():
+            raise OpError("OCR needs an absolute path for a new copy")
+        validated = validate_all([op])
+        if len(validated) != 1 or validated[0]["op"] != "ocr":
+            raise OpError("OCR start needs one OCR operation")
+        if validated[0].get("expected_source_sha256") != ed._source_fingerprint:
+            raise OpError("OCR source hash differs from this editor; preflight the saved source again")
+        return self.ocr_task.start(ed.path, validated[0], output, revision)
 
     def handle(self, payload):
         if not isinstance(payload, dict):
@@ -207,6 +329,16 @@ class Bridge:
         state = self.status()
         if action == "status":
             return state
+        if action == "ocr_start":
+            return self.start_ocr(payload.get("op"), payload.get("output"),
+                                  revision=payload.get("revision"), confirm=payload.get("confirm"))
+        if action in {"ocr_status", "ocr_cancel"}:
+            task = self.ocr_task.snapshot(state["revision"])
+            if task is None or payload.get("task_id") != task["task_id"]:
+                raise OpError("OCR task not found in this editor; read editor status")
+            if action == "ocr_cancel":
+                self.ocr_task.cancel(task["task_id"])
+            return self.ocr_task.snapshot(state["revision"])
         allowed = {"stage", "replace", "select", "move", "delete", "view", "search", "undo", "redo", "save", "close"}
         if action not in allowed:
             raise OpError("unknown editor action; see workflow-schema")
