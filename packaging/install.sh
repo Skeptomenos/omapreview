@@ -50,11 +50,14 @@ PY="$(command -v python3 || command -v python)"
 if [[ ! -x "${VENV}/bin/python" ]]; then
   "${PY}" -m venv --system-site-packages "${VENV}"
 fi
+"${VENV}/bin/python" -m venv --system-site-packages "${VENV}"
 "${VENV}/bin/python" -m pip install --upgrade pip
 "${VENV}/bin/pip" install "${SRC}"
 
 ln -sfn "${VENV}/bin/omapreview" "${BIN_DIR}/omapreview"
 ln -sfn "${VENV}/bin/omepreview" "${BIN_DIR}/omepreview"
+ln -sfn "${VENV}/bin/omapreview-mcp" "${BIN_DIR}/omapreview-mcp"
+ln -sfn "${VENV}/bin/omepreview-mcp" "${BIN_DIR}/omepreview-mcp"
 
 exec_path="${VENV}/bin/omapreview"
 sed \
@@ -80,7 +83,8 @@ fi
 
 case ":${PATH}:" in
   *":${BIN_DIR}:"*) ;;
-  *) echo "note: add ${BIN_DIR} to PATH for the terminal command (desktop Exec is absolute)." ;;
+  *) echo 'Terminal setup: export PATH="$HOME/.local/bin:$PATH" (current shell only).'
+     echo "Or use ${BIN_DIR}/omapreview directly. No shell files were changed." ;;
 esac
 
 echo "installed: ${BIN_DIR}/omapreview -> ${exec_path}"
@@ -89,3 +93,6 @@ echo "desktop:   ${DESKTOP_DST}"
 echo "Open from the Omarchy menu: Super+Space, type omapreview, Enter."
 echo "The editor starts empty — Open (Ctrl+O) picks a PDF. No file dialog in Exec."
 echo "If it is missing, run: omarchy restart shell"
+
+echo "Optional MCP: ${VENV}/bin/python -m pip install 'mcp>=1.2'"
+echo "Then launch: ${BIN_DIR}/omapreview-mcp (stdio; no checkout required)."

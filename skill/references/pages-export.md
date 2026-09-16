@@ -36,5 +36,6 @@ inspect the returned saved render.
 Before flattening, check for pending redactions and apply reviewed redaction
 operations first. After flattening, fresh reads and renders must show the
 intended appearance with annotations/widgets baked in. Name the exact verified
-artifact. Sharing or sending it requires a separately available tool and the
-user's authorization; this skill does not imply publication.
+artifact. For sharing, use CLI `workflow export` or MCP `run_workflow("export", arguments)`
+after explicit authorization. Read [desktop-workflows.md](desktop-workflows.md)
+for statuses, clipboard, dependency errors, and delivery limits.

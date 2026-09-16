@@ -1,6 +1,6 @@
 ---
 name: omepreview
-description: Use for PDF reading, review, annotation, form filling, visual signing, redaction, page surgery, flattening, or verified handoff. Choose the available CLI or MCP route and report incomplete work when a required check or capability is unavailable.
+description: Use for PDF reading, review, annotation, form filling, visual signing, redaction, page surgery, flattening, signature-library management, live editor review/history, search, or verified export/clipboard handoff. Choose the available CLI or MCP route and report incomplete work when a required check or capability is unavailable.
 ---
 
 # omepreview
@@ -38,6 +38,7 @@ are finite PDF points in unrotated CropBox-local space, with a top-left origin.
 - Annotate, redline, stamp, or mark up: read [`markup.md`](references/markup.md).
 - Fill a form, sign, or initial: read [`forms-signatures.md`](references/forms-signatures.md).
 - Permanently remove content: read [`redaction.md`](references/redaction.md).
+- Live editor proposals, pending edits, undo/redo, recording handoff, or desktop sharing: read [`desktop-workflows.md`](references/desktop-workflows.md).
 - Reorder, crop, insert, extract, flatten, or hand off: read [`pages-export.md`](references/pages-export.md).
 
 Scenario references contain independent CLI and MCP routes. An MCP-only route

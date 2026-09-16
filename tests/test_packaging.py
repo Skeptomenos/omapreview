@@ -221,3 +221,17 @@ def test_desktop_exec_is_edit_not_a_file_picker():
     assert "zenity" not in text
     assert "kdialog" not in text
     assert "file-chooser" not in text
+
+
+def test_installers_expose_cli_aliases_optional_mcp_and_path_guidance():
+    for name in ("install.sh", "install-user.sh"):
+        script = (ROOT / "packaging" / name).read_text()
+        for command in ("omapreview", "omepreview", "omapreview-mcp", "omepreview-mcp"):
+            assert command in script
+        assert 'export PATH="$HOME/.local/bin:$PATH"' in script
+        assert "No shell files were changed" in script
+        assert "mcp>=1.2" in script
+        assert "--system-site-packages" in script
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text())
+    assert project["project"]["scripts"]["omapreview-mcp"] == "omepreview.mcp_entry:main"
+    assert project["project"]["dependencies"] == ["pymupdf>=1.24"]

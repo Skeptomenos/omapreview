@@ -51,8 +51,9 @@ defaults, numeric bounds and examples. Use the catalog before constructing a
 generic batch. Dedicated wrappers are convenience routes; text boxes, ink,
 check/cross marks and any other catalog operation use the generic route.
 
-The MCP server is optional. Install it with `pip install -e '.[mcp]'`, then
-start `omepreview-mcp` on the stdio transport. See the [MCP setup guide](../README.md#mcp).
+The MCP server is optional. For a checkout install `pip install -e '.[mcp]'`, then
+start `omapreview-mcp` on the stdio transport. Installed releases can enable
+it directly in their venv without a checkout. See the [MCP setup guide](../README.md#mcp).
 
 `omepreview snapshot FILE --page N --scale 2 --grid 50 --clip X0,Y0,X1,Y1`
 writes a PNG for a human or agent to inspect. `render_page` accepts the same
@@ -360,3 +361,83 @@ atomicity.
 - [roadmap.md](roadmap.md) — shipped vs next vs P2
 
 Planned: `stamp` (library images: APPROVED, initials). See docs/roadmap.md.
+
+## Application workflows
+
+`omapreview workflow-schema` and MCP `workflow_schema` discover the same
+versioned workflow catalog. Each route includes its exact JSON argument
+schema, defaults, and status contract. Run a route with
+`omapreview workflow NAME --args 'JSON'` (`@file` or `-` for stdin also work),
+or MCP `run_workflow(name, arguments)`. Unknown arguments and wrong JSON types
+fail before action. The base CLI needs only stdlib and PyMuPDF. Desktop routes
+load GTK or external helpers only when used.
+
+| Current capability | CLI workflow / MCP run_workflow name | Completion evidence |
+|---|---|---|
+| Text search and hit geometry | `search` | Source fingerprint, 1-based page, rect and quad; compare a page render |
+| Signature add/import/list/inspect/remove | `signatures` | Stored asset path and SHA-256, then inspect/list; replacement/removal requires `confirm=true` |
+| Draw a signature | `record_signature` | `start` hands off to the real recorder; `status` must reach `saved`, with path/hash; `cancel` requests cancellation |
+| Open empty editor or PDF with review proposals | `editor`, action `open` | Exact session ID and `ready` from a live editor status; `starting` is incomplete |
+| Pending edits, geometry/text changes, removal | `editor`, actions `status`, `stage`, `replace`, `select`, `move`, `delete` | Updated pending operations and revision; no PDF saved yet |
+| Page preview / insert / delete / crop / rotate / reorder | `editor`, action `stage` | One page operation per request; saved result after confirmed `save` |
+| Undo/redo, including saved edits | `editor`, actions `undo`, `redo` | Requires `confirm=true`; reread actual saved bytes when history changes disk |
+| Save or close a session | `editor`, actions `save`, `close` | Save requires confirmation; dirty close requires confirmation to discard pending work |
+| Navigate, zoom, search visible pages | `editor`, actions `view`, `search` | Current 1-based page, zoom percent, hit geometry; observe the native window |
+| PDF copy, ZIP, flatten copy | `export` | New explicit destination, fingerprint; unzip/read/render as appropriate |
+| Email / LocalSend / show folder | `export` | Confirmed external-app handoff; `delivered=false` always, user completes the external action |
+| Copy file / ZIP to clipboard | `export` | `clipboard-owned` after helper success; paste and inspect the destination |
+| Copy/paste pages | `clipboard` | Copy selected pages as PDF; paste to a new PDF, then use `insert_pages`; inspect saved page identities |
+| Cut / cross-window paste / drag export | `clipboard` + existing page ops | Copy successfully before separately confirmed deletion; extract/insert is the file transport equivalent of drag |
+| Read, markup, shapes, ink, stamps, forms, signatures, redaction, page surgery | Existing operation catalog and `apply` / `apply_ops` | Existing saved read/render checks above |
+| Ask-agent context | `read` / `read_pdf`, `editor` status and pending ops | Return observed content and exact document/session identity to the caller; no implied external agent submission |
+
+Search uses the GUI's PyMuPDF embedded-text semantics. It does not perform OCR.
+`query` is 1–4096 characters; `limit` is 1–10000; `offset` is nonnegative.
+Continue at `next_offset` until null, using the same source fingerprint. One
+rect/quad is a matched text fragment; a dehyphenated match can span fragments.
+Coordinates stay in unrotated CropBox-local points on rotated/cropped pages.
+
+The recorder requires a graphical session and GTK. States are `starting`,
+`awaiting_human`, `saved`, `cancelled`, and `failed`. `cancel` can return
+`cancellation_requested`; poll until terminal. A crashed worker is reported as
+failed when detectable. An uncertain process outcome requires library inspection
+before retry. Job records are private local runtime files, not permanent audit
+storage. No synthetic drawing or headless signature creation is claimed.
+
+Every GUI instance registers a private local Unix socket. Session discovery
+returns exact IDs, PIDs, PDF paths, source fingerprint, dirty/conflict flags,
+pending markup/page operations, undo/redo depths, current page/zoom and a
+revision. `view` accepts `fit=true` or zoom percent; `search` accepts a 0-based
+`hit` to navigate a result. All session mutations require that revision. On rejection, inspect
+fresh status and review the target before retry. Pending indices are 0-based;
+PDF pages remain 1-based. `replace` takes one markup operation and replaces the
+chosen pending item (match-based markup may resolve to several ghosts).
+`pending` preserves ghost order, including deletion runs; Save alone uses the
+engine's safe execution order. `selected_index` refers to that pending list.
+`move` rejects fixed widget/annotation targets. Use `replace` to retarget them.
+`stage` accepts a markup batch or one page operation. `extract_pages` uses the
+existing file export operation. Proposal opening accepts the GUI's markup ops;
+stage page operations after opening. Imported page sources use retained copies.
+
+Session requests are limited to 1 MiB. All editor changes run on the GTK main
+loop. Source conflict checks remain active. The transport is local-user access,
+not a network service or authorization boundary between processes of the same
+user. A timeout is not proof that a mutation failed: read status and saved bytes
+before retry. Session history lives as long as the editor process. It is not a
+persistent version store. Fit/scroll/pointer gestures and toolbar styling remain
+human presentation controls; navigation/zoom and all resulting document edits
+have the routes above.
+
+Export workflows operate on saved PDF bytes. Save pending edits first. `copy`,
+`zip`, `flatten`, and `zip-clipboard` require a new output; existing files and
+symlinks are refused. Publication is private and does not overwrite a racing
+file. `flatten` uses the shared engine and its pending-redaction refusal.
+Email, LocalSend, folder, and clipboard actions require `confirm=true`.
+Email opens a composer; LocalSend opens its app. A PID or successful helper exit
+never proves delivery. Validation uses isolated mock helpers, never recipients.
+Clipboard PDF payloads are limited to 64 MiB; Wayland uses wl-copy/wl-paste,
+X11 uses xclip. Missing helpers return actionable errors. A clipboard owner can
+be replaced by another app; inspect the final pasted artifact.
+
+Future OCR belongs in the shared operation schema/engine with its own documented
+execution contract. The recorder-specific handoff is not an OCR job framework.

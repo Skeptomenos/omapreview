@@ -11,6 +11,7 @@ omapreview read input.pdf --json
 omapreview fields input.pdf
 omapreview pages input.pdf --list
 omapreview operations
+omapreview workflow-schema
 omapreview snapshot input.pdf --page 1 --scale 2 -o before.png
 ```
 
@@ -61,3 +62,11 @@ Check the operation-specific postconditions, the output fingerprint, and a
 control page or protected text. For redaction or flattening, use the dedicated
 scenario checks. If the saved observation is wrong or stale, do not report
 success; return to the original source and repair with a new destination.
+
+## Application workflows
+
+Use `omapreview workflow NAME --args 'JSON'` for routes in `workflow-schema`.
+Arguments can come from `--args @file.json` or stdin with `--args -`. Results
+are always JSON. The schema lists exact fields and status meanings. Search,
+signature management, editor sessions, exports, and clipboard share this route.
+For desktop tasks load [desktop-workflows.md](desktop-workflows.md).

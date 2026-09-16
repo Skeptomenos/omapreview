@@ -42,8 +42,9 @@ omapreview read signed.pdf --json
 omapreview snapshot signed.pdf --page 1 -o signed.png
 ```
 
-Use the saved signature name the user authorized. If it is missing, stop
-without writing and ask the user to add or draw one. A GUI ghost may be offered
+Use the saved signature name the user authorized. If it is missing, use the authorized `signatures` import route or the
+`record_signature` human handoff. Load [desktop-workflows.md](desktop-workflows.md).
+Do not place a signature until its saved asset is verified. A GUI ghost may be offered
 for aesthetic placement, but the saved output must still be reopened and
 rendered. Check the signature position, size, optional date, and protected text.
 
@@ -54,3 +55,8 @@ proposal. After user approval call it again with `confirmed=true` and an
 explicit output. Verify with `read_pdf` and a no-grid `render_page` image.
 Missing signature, unapproved placement, or absent visual verification means
 the signing task is incomplete. Do not describe this as cryptographic signing.
+
+Library management uses CLI `workflow signatures` or MCP
+`run_workflow("signatures", arguments)`. Discover fields first. `inspect` returns
+path/hash; `add`/`import` accepts SVG/PNG; replacement and `remove` require
+confirmation. Verify the remaining library and preserve the imported source.

@@ -20,6 +20,8 @@ if [[ ! -x "${VENV}/bin/python" ]]; then
   "${PY}" -m venv --system-site-packages "${VENV}"
 fi
 
+# Repair older plain venvs so the GUI can see system GTK dependencies.
+"${VENV}/bin/python" -m venv --system-site-packages "${VENV}"
 "${VENV}/bin/pip" install -e "${ROOT}"
 
 mkdir -p "${BIN_DIR}" "${APP_DIR}"
@@ -57,3 +59,14 @@ echo "desktop:   ${DESKTOP_DST}"
 echo "Open from the Omarchy menu: Super+Space, type omapreview, Enter."
 echo "The editor starts empty — Open (Ctrl+O) picks a PDF."
 echo "If it is missing, run: omarchy restart shell"
+
+for command in omapreview-mcp omepreview-mcp; do
+  ln -sfn "${VENV}/bin/${command}" "${BIN_DIR}/${command}"
+done
+case ":${PATH}:" in
+  *":${BIN_DIR}:"*) ;;
+  *) echo 'Terminal setup: export PATH="$HOME/.local/bin:$PATH" (current shell only).'
+     echo "Or use ${BIN_DIR}/omapreview directly. No shell files were changed." ;;
+esac
+echo "Optional MCP: ${VENV}/bin/python -m pip install 'mcp>=1.2'"
+echo "Then launch: ${BIN_DIR}/omapreview-mcp (stdio)."

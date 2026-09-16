@@ -30,3 +30,13 @@ state that it is scanned/image-only and OCR is not built in. Offer a visual
 review or ask for OCR text; do not invent text or claim a comparison/diff
 service. If review leads to markup, switch to the markup recipe and verify the
 saved output separately.
+
+## Search exact targets
+
+Discover `search` through `workflow-schema` (CLI) or `workflow_schema` (MCP).
+CLI: `omapreview workflow search --args '{"path":"input.pdf","query":"term"}'`.
+MCP: `run_workflow("search", {"path":"input.pdf","query":"term"})`.
+Read all pages of results using `next_offset`; retain the source fingerprint.
+Hit rects/quads are operation coordinates. Render the intended hit and protected
+neighbors before changing it. Empty hits do not establish that scanned text is
+absent. For human proposal review use [desktop-workflows.md](desktop-workflows.md).

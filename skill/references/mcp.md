@@ -7,7 +7,7 @@ check below is a tool call.
 
 ## Discover the live contract
 
-Initialize the session, call `tools/list`, then call `operation_schema`. The
+Initialize the session, call `tools/list`, then call `operation_schema` for edits and `workflow_schema` for application workflows. The
 required core tools are `read_pdf`, `render_page`, `operation_schema`,
 `list_form_fields`, `apply_ops`, and `list_pages`. Available dedicated tools
 include `highlight`, `add_note`, `fill_field`, `place_signature`,
@@ -47,3 +47,10 @@ If a tool errors, first inspect the returned error and whether the destination
 exists in the tool results. Do not retry a mutation until the write state is
 known. If the requested feature is absent from `tools/list`, report the gap or
 switch to CLI only when the user permits that route.
+
+## Application workflows
+
+Call `run_workflow(name, arguments)` using the exact `workflow_schema` route.
+Search, signatures, recorder handoff, editor sessions, export, and clipboard
+work without a hidden CLI call. Load [desktop-workflows.md](desktop-workflows.md)
+for live sessions and handoff states. Error results are not completion.
