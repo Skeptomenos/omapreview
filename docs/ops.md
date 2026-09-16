@@ -433,7 +433,7 @@ loop. Source conflict checks remain active. The transport is local-user access,
 not a network service or authorization boundary between processes of the same
 user. A timeout is not proof that a mutation failed: read status and saved bytes
 before retry. Session history lives as long as the editor process. It is not a
-persistent version store. Fit/scroll/pointer gestures and toolbar styling remain
+persistent version store. Scroll/pointer gestures and toolbar styling remain
 human presentation controls; navigation/zoom and all resulting document edits
 have the routes above.
 
@@ -452,3 +452,5 @@ be replaced by another app; inspect the final pasted artifact.
 
 Future OCR belongs in the shared operation schema/engine with its own documented
 execution contract. The recorder-specific handoff is not an OCR job framework.
+
+Validation: [CLI/MCP workflow acceptance, 2026-09-16](evidence/full-interface-parity-2026-09-16.md).
