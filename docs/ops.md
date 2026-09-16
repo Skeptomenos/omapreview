@@ -593,9 +593,9 @@ result is the engine envelope. States are running, cancelling, complete,
 needs_review, failed, cancelled, timed_out. Cancellation requested is not cleanup
 completion. Editor `close` returns `closing` while active OCR cleanup finishes;
 ordinary close returns `closed`. This is separate from OCR task status.
-The bridge never implicitly opens the result. The GUI executor ships
-with the separate GUI batch; headless OCR requires no GUI session. Recorder
-handoff is separate from OCR execution.
+The bridge never implicitly opens the result. The native editor runs OCR outside
+the GTK main loop. Headless OCR requires no GUI session. Recorder handoff is
+separate from OCR execution.
 
 After saving, read and render the destination through the same selected interface,
 match fingerprints, inspect expected phrases against actual pixels, and report
