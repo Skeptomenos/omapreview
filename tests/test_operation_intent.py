@@ -294,7 +294,13 @@ def test_proposal_object_targets_keep_their_page_alive(tmp_path):
     pdf = _make_object_target_pdf(tmp_path / "object-targets.pdf")
     proposal = tmp_path / "object-targets.json"
     source_ops = [
-        {"op": "fill_field", "field": "answer", "value": "verified"},
+        {
+            "op": "fill_field",
+            "field": "answer",
+            "value": "verified",
+            "page": 1,
+            "rect": [160, 180, 400, 198],
+        },
         {"op": "delete_annotation", "page": 1, "index": 0},
     ]
     proposal.write_text(json.dumps(source_ops), encoding="utf-8")

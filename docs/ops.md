@@ -121,6 +121,9 @@ is not by itself verification.
   serialization succeed. In-place saves use an atomic replacement and keep
   the source file private (`0600`). Existing PDF encryption and permissions
   are retained; password-protected files that cannot be opened are rejected.
+- Dry runs execute the same in-memory sequence, including redactions and
+  annotation deletions, so later operations see the state they would see on
+  commit. They publish no main output or extraction files.
 
 ### Numeric limits
 
@@ -166,10 +169,18 @@ non-form document). `size` defaults to 11pt.
 ### fill_field
 ```json
 {"op": "fill_field", "field": "tenant_name", "value": "Jane Doe"}
+{"op": "fill_field", "field": "tenant_name", "value": "Jane Doe",
+ "page": 2, "rect": [160, 180, 400, 198]}
 ```
 Fills an AcroForm field by name (find names with `omepreview fields`). Checkbox
 fields accept `true/yes/on/1` (case-insensitive). Unknown names fail with the
-document's actual field list in the error. Report adds `page`.
+document's actual field list in the error. `omepreview read` and `omepreview
+fields` report each field's page and widget rectangle. A name-only request is
+valid only when it matches one widget. For repeated names, add `page` and,
+when needed, the exact `rect` from the read result. A selector that matches no
+widget or more than one widget is rejected; the engine never silently fills the
+first match. The CLI `fill --page N --rect X0,Y0,X1,Y1` and MCP `fill_field`
+accept the same selectors. The report adds the resolved `page` and `rect`.
 
 ### place_signature
 ```json
@@ -250,7 +261,13 @@ Reorder pages. `after`: 0 = beginning; N = after current page N. Report:
 Exactly one of `source`, `blank`, or `image`. `source_pages` defaults to all
 pages in the source PDF. Blank pages default to A4 (595×842 pt). Image pages
 are sized to the previous page when `after` ≥ 1, otherwise to the image
-pixels. Report includes `inserted` and which variant was used.
+pixels. Report includes `inserted` and which variant was used. Internal links
+between selected source pages are remapped to their copied page numbers.
+Links to source pages outside `source_pages` are omitted because the copied
+document has no corresponding target page. External URI links are retained.
+Repeated entries in `source_pages` produce repeated page copies. If a linked
+target is repeated, links use the first copied occurrence as the deterministic
+destination.
 
 ### extract_pages
 ```json
@@ -270,6 +287,10 @@ permission settings without the original credentials. When one batch publishes
 several independent outputs, operation application is atomic, but the final
 filesystem renames are separate: an unusual failure during that publication
 phase can leave earlier destination renames in place.
+Internal links whose source and destination pages are both selected are
+preserved and remapped in the excerpt. Links to pages outside the selection
+are omitted. External URI links are retained. Repeated selected page numbers
+produce repeated copies; a repeated linked target resolves to its first copy.
 
 ### redact
 ```json
@@ -321,8 +342,10 @@ covers content visually but leaves the underlying text in `get_text()` /
 {"op": "delete_annotation", "page": 1, "index": 0}
 ```
 Removes one annotation on `page` by 0-based `index` (listed in `omepreview read`
-under `annotations`). When deleting several on the same page in one batch,
-indices are applied high-to-low so they stay valid. Report adds `type` and
+under `annotations`). Consecutive delete-annotation operations are applied
+high-to-low within their run so indices stay valid. A run never crosses a
+page move, insertion, deletion or another operation; later page numbers refer
+to the document state at that point. Report adds `type` and
 `rect` of the removed annotation.
 
 ## Extending

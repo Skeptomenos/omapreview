@@ -224,12 +224,22 @@ def fill_field(
     path: str,
     field: str,
     value: str,
+    page: int | None = None,
+    rect: list[float] | None = None,
     output: str | None = None,
 ) -> dict:
-    """Fill one form field by name. Errors list the document's real field
-    names if the name doesn't match."""
+    """Fill one form field by name and optional page/rect selectors.
+
+    A name-only request must identify one widget. Use page and/or rect when a
+    PDF repeats a field name; ambiguous matches are rejected.
+    """
+    op: dict = {"op": "fill_field", "field": field, "value": value}
+    if page is not None:
+        op["page"] = page
+    if rect is not None:
+        op["rect"] = rect
     return engine.apply(
-        path, [{"op": "fill_field", "field": field, "value": value}], output=output
+        path, [op], output=output
     )
 
 

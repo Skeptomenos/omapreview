@@ -114,7 +114,11 @@ def extract(
 
 
 def form_fields(pdf: str | Path) -> list[dict]:
-    """Flat list of every form field with its page number."""
+    """Flat field list with page and widget-rectangle selectors.
+
+    The ``(name, page, rect)`` values can be passed to ``fill_field`` when a
+    PDF repeats a field name. A name-only fill is accepted only for one match.
+    """
     doc = pymupdf.open(str(Path(pdf)))
     try:
         out = []

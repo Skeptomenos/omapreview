@@ -1104,21 +1104,41 @@ class Editor:
                         )
                     )
             elif kind == "fill_field":
-                field_match = None
+                field_matches = []
                 for page_no in range(self.doc.page_count):
+                    if page is not None and page_no != page:
+                        continue
                     pdf_page = self.doc[page_no]
                     for widget in pdf_page.widgets() or []:
-                        if widget.field_name == op["field"]:
-                            field_match = (page_no, list(widget.rect))
-                            break
-                    if field_match is not None:
-                        break
-                if field_match is None:
+                        if widget.field_name != op["field"]:
+                            continue
+                        if "rect" in op and not engine._same_rect(
+                            widget.rect, pymupdf.Rect(op["rect"])
+                        ):
+                            continue
+                        field_matches.append((page_no, list(widget.rect)))
+                if not field_matches:
+                    selector = []
+                    if page is not None:
+                        selector.append(f"page {page + 1}")
+                    if "rect" in op:
+                        selector.append(f"rect {op['rect']}")
+                    qualifier = f" matching {' and '.join(selector)}" if selector else ""
                     raise OpError(
-                        f"proposal rejected: no form field named {op['field']!r} "
-                        "was found in the document"
+                        f"proposal rejected: no form field named {op['field']!r}"
+                        f"{qualifier} was found in the document"
                     )
-                field_page, field_rect = field_match
+                if len(field_matches) > 1:
+                    details = ", ".join(
+                        f"page {field_page + 1} rect {field_rect}"
+                        for field_page, field_rect in field_matches
+                    )
+                    raise OpError(
+                        f"proposal rejected: form field {op['field']!r} is ambiguous; "
+                        "specify a unique page and/or rect selector. "
+                        f"Matches: {details}"
+                    )
+                field_page, field_rect = field_matches[0]
                 proposed.append({
                     "kind": "field_fill", "page": field_page,
                     "field": op["field"], "value": op["value"],
@@ -1190,7 +1210,13 @@ class Editor:
             elif it["kind"] == "redact":
                 ops.append(redact_item_to_op(it))
             elif it["kind"] == "field_fill":
-                ops.append({"op": "fill_field", "field": it["field"], "value": it["value"]})
+                ops.append({
+                    "op": "fill_field",
+                    "field": it["field"],
+                    "value": it["value"],
+                    "page": page,
+                    "rect": list(it["rect"]),
+                })
             elif it["kind"] == "delete_annot":
                 ops.append({"op": "delete_annotation", "page": page, "index": it["index"]})
         return engine._order_ops(ops)

@@ -124,8 +124,23 @@ OPERATION_CATALOG = {
     },
     "fill_field": {
         "required": ["op", "field", "value"],
-        "fields": {"op": {"const": "fill_field"}, "field": {"type": "string"}, "value": {"type": "string"}},
-        "examples": [{"op": "fill_field", "field": "tenant_name", "value": "Jane Doe"}],
+        "fields": {
+            "op": {"const": "fill_field"},
+            "field": {"type": "string"},
+            "value": {"type": "string"},
+            "page": _PAGE,
+            "rect": _RECT,
+        },
+        "examples": [
+            {"op": "fill_field", "field": "tenant_name", "value": "Jane Doe"},
+            {
+                "op": "fill_field",
+                "field": "tenant_name",
+                "value": "Jane Doe",
+                "page": 2,
+                "rect": [160, 180, 400, 198],
+            },
+        ],
     },
     "place_signature": {
         "required": ["op", "page", "at"],
@@ -345,8 +360,17 @@ def validate(op: dict) -> dict:
         )
 
     elif kind == "fill_field":
-        _require(op, "field")
+        field = _require(op, "field")
+        if not isinstance(field, str) or not field:
+            raise OpError(f"field must be a non-empty string, got {field!r}")
         _require(op, "value")
+        if "page" in op:
+            page = op["page"]
+            if not (isinstance(page, int) and not isinstance(page, bool) and page >= 1):
+                raise OpError(f"page must be a 1-based integer, got {page!r}")
+            out["page"] = page
+        if "rect" in op:
+            out["rect"] = _rect(op["rect"])
 
     elif kind == "ink":
         _require(op, "page")

@@ -92,23 +92,53 @@ def _apply_text_box(doc, op) -> dict:
 
 def _apply_fill_field(doc, op) -> dict:
     name, value = op["field"], op["value"]
+    wanted_page = op.get("page")
+    wanted_rect = pymupdf.Rect(op["rect"]) if "rect" in op else None
+    matches: list[tuple[pymupdf.Page, object]] = []
     for page in doc:
-        for widget in page.widgets():
+        if wanted_page is not None and page.number + 1 != wanted_page:
+            continue
+        for widget in page.widgets() or []:
             if widget.field_name != name:
                 continue
-            if widget.field_type == pymupdf.PDF_WIDGET_TYPE_CHECKBOX:
-                widget.field_value = str(value).lower() in ("true", "yes", "on", "1")
-            else:
-                widget.field_value = str(value)
-            widget.update()
-            return {"field": name, "page": page.number + 1}
+            if wanted_rect is not None and not _same_rect(widget.rect, wanted_rect):
+                continue
+            matches.append((page, widget))
+
+    if len(matches) > 1:
+        details = ", ".join(
+            f"page {page.number + 1} rect {list(widget.rect)}"
+            for page, widget in matches
+        )
+        raise OpError(
+            f"form field {name!r} is ambiguous; specify a unique page and/or "
+            f"rect selector. Matches: {details}"
+        )
+    if matches:
+        page, widget = matches[0]
+        if widget.field_type == pymupdf.PDF_WIDGET_TYPE_CHECKBOX:
+            widget.field_value = str(value).lower() in ("true", "yes", "on", "1")
+        else:
+            widget.field_value = str(value)
+        widget.update()
+        return {"field": name, "page": page.number + 1, "rect": list(widget.rect)}
     known = sorted(
         w.field_name for p in doc for w in p.widgets() if w.field_name
     )
+    selector = []
+    if wanted_page is not None:
+        selector.append(f"page {wanted_page}")
+    if wanted_rect is not None:
+        selector.append(f"rect {list(wanted_rect)}")
+    qualifier = f" matching {' and '.join(selector)}" if selector else ""
     raise OpError(
-        f"no form field named {name!r}. Fields in this document: "
+        f"no form field named {name!r}{qualifier}. Fields in this document: "
         f"{', '.join(known) if known else '(none — this PDF has no form)'}"
     )
+
+
+def _same_rect(first: pymupdf.Rect, second: pymupdf.Rect, *, tolerance: float = 0.01) -> bool:
+    return all(abs(a - b) <= tolerance for a, b in zip(first, second))
 
 
 def _apply_place_signature(doc, op) -> dict:
@@ -201,6 +231,29 @@ def _crop_rect_to_absolute(page: pymupdf.Page, rect: list[float]) -> pymupdf.Rec
             f"(page size {page.rect.width:.0f}×{page.rect.height:.0f} pt)"
         )
     return clipped
+
+
+def _local_rects_to_absolute(page: pymupdf.Page, rects: list[pymupdf.Rect]) -> list[list[float]]:
+    """Preserve CropBox-local rectangles in the page's absolute frame."""
+    base = page.cropbox
+    return [
+        [base.x0 + rect.x0, base.y0 + rect.y0, base.x0 + rect.x1, base.y0 + rect.y1]
+        for rect in rects
+    ]
+
+
+def _absolute_rects_to_local(page: pymupdf.Page, rects: list) -> list[pymupdf.Rect]:
+    """Translate absolute rectangles into the page's current CropBox frame."""
+    base = page.cropbox
+    return [
+        pymupdf.Rect(
+            rect[0] - base.x0,
+            rect[1] - base.y0,
+            rect[2] - base.x0,
+            rect[3] - base.y0,
+        )
+        for rect in rects
+    ]
 
 
 def _apply_crop_pages(doc, op) -> dict:
@@ -325,13 +378,7 @@ def _apply_insert_pages(doc, op) -> dict:
             raise OpError(f"{source} is password-protected; decrypt it first")
         source_pages = op.get("source_pages") or list(range(1, src_doc.page_count + 1))
         _validate_page_indices(src_doc, source_pages, "source page")
-        for i, sp in enumerate(source_pages):
-            doc.insert_pdf(
-                src_doc,
-                from_page=sp - 1,
-                to_page=sp - 1,
-                start_at=start_at + i,
-            )
+        _insert_selected_pages(doc, src_doc, source_pages, start_at=start_at)
         return {
             "after": after,
             "inserted": len(source_pages),
@@ -352,22 +399,120 @@ def _verify_redact(page: pymupdf.Page, match: str | None, rects: list[pymupdf.Re
     }
 
 
-def _verify_redact_ops_serialized(doc: pymupdf.Document, applied: list[dict]) -> None:
+def _insert_selected_pages(
+    destination: pymupdf.Document,
+    source: pymupdf.Document,
+    source_pages: list[int],
+    *,
+    start_at: int = -1,
+) -> None:
+    """Copy selected pages and retain links whose endpoints are also copied.
+
+    PyMuPDF can remap links when one contiguous range is copied, but copying
+    selected pages one at a time leaves broken or stale internal destinations.
+    Copy all pages first, then rebuild their links against the selected-page
+    mapping. Internal links to pages outside the selection are intentionally
+    dropped because the destination document has no corresponding page.
+    """
+    first_destination = start_at if start_at >= 0 else destination.page_count
+    page_map: dict[int, list[int]] = {}
+    occurrences: list[tuple[int, int]] = []
+    for i, source_page in enumerate(source_pages):
+        destination_page = first_destination + i
+        page_map.setdefault(source_page, []).append(destination_page)
+        occurrences.append((source_page, destination_page))
+    insert_at = start_at
+    for source_page in source_pages:
+        destination.insert_pdf(
+            source,
+            from_page=source_page - 1,
+            to_page=source_page - 1,
+            start_at=insert_at,
+        )
+        if insert_at >= 0:
+            insert_at += 1
+
+    for source_page, destination_number in occurrences:
+        destination_page = destination[destination_number]
+        for link in list(destination_page.get_links()):
+            destination_page.delete_link(link)
+        for link in source[source_page - 1].get_links():
+            copied = dict(link)
+            if copied.get("kind") == pymupdf.LINK_GOTO and copied.get("page", -1) >= 0:
+                target = copied["page"] + 1
+                if target not in page_map:
+                    continue
+                # A duplicated target has one deterministic destination: its
+                # first copied occurrence. Every copied source occurrence
+                # still receives its own source-page links.
+                copied["page"] = page_map[target][0]
+            destination_page.insert_link(copied)
+
+
+def _verify_redact_ops_serialized(
+    doc: pymupdf.Document,
+    applied: list[dict],
+    *,
+    include_unapplied: bool = False,
+) -> None:
     """Reopen a garbage-collected serialization so leftover annot payloads fail closed."""
     redact_ops = [
         op
         for op in applied
         if op.get("op") == "redact"
         and op.get("apply_now", True)
-        and op.get("applied")
+        and (include_unapplied or op.get("applied"))
     ]
     if not redact_ops:
         return
+    logical_pages: dict[int, int] = {}
+    for op in redact_ops:
+        logical_xref = op.get("_logical_page_xref")
+        if logical_xref is None:
+            continue
+        current_page = next(
+            (page for page in doc if page.xref == logical_xref), None
+        )
+        if current_page is None:
+            raise OpError(
+                f"redact verify failed: logical page xref {logical_xref} "
+                "is missing after page operations"
+            )
+        logical_pages[id(op)] = current_page.number
     blob = doc.tobytes(garbage=3, deflate=True)
     probe = pymupdf.open("pdf", blob)
     try:
         for op in redact_ops:
-            redact_scope.verify_serialized(probe, op)
+            logical_xref = op.get("_logical_page_xref")
+            if logical_xref is None:
+                redact_scope.verify_serialized(probe, op)
+                continue
+            page_number = logical_pages[id(op)]
+            if page_number < 0 or page_number >= probe.page_count:
+                raise OpError(
+                    f"redact verify failed: logical page xref {logical_xref} "
+                    "is missing after page operations"
+                )
+            current_page = probe[page_number]
+            absolute_rects = op.get("_redact_absolute_rects")
+            if absolute_rects is None:
+                rects = [pymupdf.Rect(r) for r in op["rects"]]
+            else:
+                rects = _absolute_rects_to_local(current_page, absolute_rects)
+            detail = redact_scope.leftover_text_detail(
+                current_page, op.get("match"), rects
+            )
+            if detail:
+                raise OpError(
+                    f"redact verify failed on logical page xref {logical_xref}: {detail}"
+                )
+            leftovers = redact_scope.intersecting_payloads(current_page, rects)
+            if leftovers:
+                raise OpError(
+                    "redact verify failed on logical page "
+                    f"xref {logical_xref}: payloads still present in the region "
+                    f"after serialization: {', '.join(leftovers)}"
+                )
     finally:
         probe.close()
 
@@ -492,8 +637,7 @@ def _stage_extract_pages(doc, op) -> tuple[dict, Path]:
     staged = _stage_output_path(dest)
     out_doc = pymupdf.open()
     try:
-        for p in pages:
-            out_doc.insert_pdf(doc, from_page=p - 1, to_page=p - 1)
+        _insert_selected_pages(out_doc, doc, pages)
         out_doc.save(str(staged), garbage=3, deflate=True)
         chmod_private_file(staged)
     except BaseException:
@@ -667,13 +811,31 @@ def _plan_outputs(
 
 
 def _order_ops(ops: list[dict]) -> list[dict]:
-    """Delete annotations high-to-low per page so indices stay valid in a batch."""
-    deletes = [op for op in ops if op["op"] == "delete_annotation"]
-    if not deletes or len(deletes) == 1:
-        return ops
-    rest = [op for op in ops if op["op"] != "delete_annotation"]
-    deletes.sort(key=lambda op: (op["page"], op["index"]), reverse=True)
-    return rest + deletes
+    """Sort only contiguous annotation-delete runs high-to-low per page.
+
+    A page move/delete/insert can change which logical page a later page
+    number identifies. Keeping each delete run in place prevents it from
+    crossing a structural operation, while high-to-low ordering keeps the
+    documented annotation-index contract within the run.
+    """
+    ordered: list[dict] = []
+    delete_run: list[dict] = []
+
+    def flush() -> None:
+        if delete_run:
+            ordered.extend(
+                sorted(delete_run, key=lambda op: (op["page"], op["index"]), reverse=True)
+            )
+            delete_run.clear()
+
+    for op in ops:
+        if op["op"] == "delete_annotation":
+            delete_run.append(op)
+        else:
+            flush()
+            ordered.append(op)
+    flush()
+    return ordered
 
 
 def apply(
@@ -723,6 +885,7 @@ def apply(
             )
         _ensure_pages_remain(doc, validated)
         applied = []
+        verification_applied = []
         for op in validated:
             if op["op"] == "extract_pages":
                 if dry_run:
@@ -732,17 +895,40 @@ def apply(
                     staged_extractions.append(
                         (Path(op["to"]).expanduser().absolute(), staged)
                     )
+                verification_resolution = resolution
             elif op["op"] == "redact":
-                resolution = _apply_redact(doc, op, dry_run=dry_run)
+                # Dry runs operate on this disposable document so dependent
+                # operations see the same state as a commit.
+                resolution = _apply_redact(doc, op, dry_run=False)
+                verification_resolution = {
+                    **resolution,
+                    "_logical_page_xref": doc[op["page"] - 1].xref,
+                    "_redact_absolute_rects": _local_rects_to_absolute(
+                        doc[op["page"] - 1],
+                        [pymupdf.Rect(rect) for rect in resolution["rects"]],
+                    ),
+                }
             elif op["op"] == "delete_annotation":
-                resolution = _apply_delete_annotation(doc, op, dry_run=dry_run)
+                # See the redaction note above: no publication occurs for a
+                # dry run, but the in-memory state must still advance.
+                resolution = _apply_delete_annotation(doc, op, dry_run=False)
+                verification_resolution = resolution
             else:
                 resolution = _APPLIERS[op["op"]](doc, op)
-            applied.append({**op, **resolution, "applied": not dry_run})
+                verification_resolution = resolution
+            report = {**op, **resolution, "applied": not dry_run}
+            applied.append(report)
+            verification_applied.append(
+                {**op, **verification_resolution, "applied": not dry_run}
+            )
+        _verify_redact_ops_serialized(
+            doc, verification_applied, include_unapplied=dry_run
+        )
         if dry_run:
             doc.close()
             return {"output": None, "applied": applied}
-        _verify_redact_ops_serialized(doc, applied)
+        # The document is already fully simulated above. Only now serialize
+        # and publish the completed result.
         if save_main:
             staged_main = _stage_save(doc, main_output)
         doc.close()

@@ -248,7 +248,7 @@ def test_operation_catalog_covers_authoritative_types_and_bounds():
         "highlight": {"op", "page", "match", "rect", "style"},
         "note": {"op", "page", "at", "text"},
         "text_box": {"op", "page", "rect", "text", "size"},
-        "fill_field": {"op", "field", "value"},
+        "fill_field": {"op", "field", "value", "page", "rect"},
         "place_signature": {"op", "page", "at", "width", "signature", "date"},
         "ink": {"op", "page", "strokes", "color", "width"},
         "rotate_pages": {"op", "pages", "degrees"},

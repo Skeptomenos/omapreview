@@ -227,7 +227,14 @@ def cmd_note(args):
 
 
 def cmd_fill(args):
-    op_list = [{"op": "fill_field", "field": name, "value": value} for name, value in args.field]
+    op_list = []
+    for name, value in args.field:
+        op = {"op": "fill_field", "field": name, "value": value}
+        if args.page is not None:
+            op["page"] = args.page
+        if args.rect is not None:
+            op["rect"] = args.rect
+        op_list.append(op)
     _run_edit(args, op_list)
 
 
@@ -501,6 +508,12 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("fill", help="fill form fields")
     p.add_argument("pdf")
     p.add_argument("--field", nargs=2, action="append", metavar=("NAME", "VALUE"), required=True)
+    p.add_argument("--page", type=int, help="narrow repeated field names to page N")
+    p.add_argument(
+        "--rect",
+        type=_rect,
+        help="narrow a repeated field to widget X0,Y0,X1,Y1 in points",
+    )
     _out_args(p)
     p.set_defaults(func=cmd_fill)
 
