@@ -13,7 +13,7 @@
 
 ### Fixed
 
-- OCR redaction now covers faint scan-edge pixels outside tight text boxes while preserving neighboring glyphs, including diagonal neighbors. Saved hidden text and image content are checked independently.
+- OCR redaction now covers faint scan-edge pixels outside tight text boxes while preserving neighboring glyphs, including diagonal neighbors. Release acceptance checked saved hidden text and image content independently.
 - Real editor-session responses correctly return OCR task records, including success, failure and cancellation.
 - Ordinary MCP edits no longer block the server event loop during OCR.
 - OCR preparation and child processes stop on cancellation or editor close. Opening a completed copy preserves the user's control over pending edits and undo history.
