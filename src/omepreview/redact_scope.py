@@ -285,7 +285,9 @@ def expand_rects_to_glyphs(page: pymupdf.Page, rects: list) -> list[pymupdf.Rect
                 selected.append(glyph)
         if image_backed and selected:
             # Limit each edge independently by the nearest other glyph whose
-            # bbox overlaps that edge's perpendicular span.
+            # bbox overlaps that edge's perpendicular span. A second pass
+            # also handles diagonal neighbors: a corner expansion must not
+            # turn two originally disjoint bboxes into an intersection.
             margin = [_IMAGE_EDGE_MARGIN] * 4
             for _ch, glyph in glyphs:
                 if glyph in selected:
@@ -300,6 +302,38 @@ def expand_rects_to_glyphs(page: pymupdf.Page, rects: list) -> list[pymupdf.Rect
                         margin[1] = min(margin[1], (union.y0 - glyph.y1) / 2)
                     elif glyph.y0 >= union.y1:
                         margin[3] = min(margin[3], (glyph.y0 - union.y1) / 2)
+            for _ch, glyph in glyphs:
+                if glyph in selected:
+                    continue
+                proposed = pymupdf.Rect(
+                    union.x0 - margin[0],
+                    union.y0 - margin[1],
+                    union.x1 + margin[2],
+                    union.y1 + margin[3],
+                )
+                if not proposed.intersects(glyph):
+                    continue
+                options: list[tuple[int, float]] = []
+                if glyph.x0 >= union.x1:
+                    options.append((2, glyph.x0 - union.x1))
+                elif glyph.x1 <= union.x0:
+                    options.append((0, union.x0 - glyph.x1))
+                if glyph.y0 >= union.y1:
+                    options.append((3, glyph.y0 - union.y1))
+                elif glyph.y1 <= union.y0:
+                    options.append((1, union.y0 - glyph.y1))
+                if options:
+                    # Choose the axis that sacrifices the least margin. This
+                    # keeps the largest safe portion of the scan cleanup.
+                    side, gap = min(
+                        options,
+                        key=lambda item: max(0.0, margin[item[0]] - item[1]),
+                    )
+                    margin[side] = min(margin[side], max(0.0, gap))
+                else:
+                    # An unselected glyph already overlaps the source rect;
+                    # do not enlarge an ambiguous edge at all.
+                    margin = [0.0] * 4
             union = pymupdf.Rect(
                 union.x0 - margin[0],
                 union.y0 - margin[1],
