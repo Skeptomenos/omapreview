@@ -15,7 +15,9 @@ from __future__ import annotations
 
 import base64
 import json
+from functools import wraps
 
+import pymupdf
 from pydantic import StrictBool, StrictFloat, StrictInt
 
 try:
@@ -28,11 +30,49 @@ try:  # MCP SDK v2
 except ImportError:  # SDK v1
     from mcp.server.fastmcp import FastMCP as _Server
 
+try:  # MCP SDK v2
+    from mcp.server.mcpserver.exceptions import ToolError as _ToolError
+except ImportError:  # MCP SDK v1
+    from mcp.server.fastmcp.exceptions import ToolError as _ToolError
+
 from . import engine, pages as pages_mod, read, render, signature
-from .ops import operation_catalog
+from .ops import OpError, operation_catalog
 
 mcp = _Server("omepreview")
 StrictNumber = StrictInt | StrictFloat
+
+_EXPECTED_TOOL_ERRORS = (
+    OpError,
+    FileNotFoundError,
+    PermissionError,
+    IsADirectoryError,
+    ValueError,
+)
+if hasattr(pymupdf, "FileDataError"):
+    _EXPECTED_TOOL_ERRORS += (pymupdf.FileDataError,)
+
+
+def _tool_boundary(fn):
+    """Expose anticipated user/input failures without leaking unexpected crashes."""
+    @wraps(fn)
+    def wrapped(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except _EXPECTED_TOOL_ERRORS as exc:
+            raise _ToolError(str(exc)) from exc
+
+    return wrapped
+
+
+def _tool(*tool_args, **tool_kwargs):
+    """Register a tool with the same schema and an actionable error boundary."""
+    def register(fn):
+        mcp.tool(*tool_args, **tool_kwargs)(_tool_boundary(fn))
+        # Keep direct Python callers on the established function contract.
+        # Only calls crossing the MCP server boundary need ToolError mapping.
+        return fn
+
+    return register
 
 
 def _supports_structured_result() -> bool:
@@ -67,7 +107,7 @@ def _apply_guarded(
     return result
 
 
-@mcp.tool()
+@_tool()
 def operation_schema() -> dict:
     """Return the complete versioned catalog for all supported operations.
 
@@ -78,7 +118,7 @@ def operation_schema() -> dict:
     return operation_catalog()
 
 
-@mcp.tool()
+@_tool()
 def render_page(
     path: str,
     page: StrictInt = 1,
@@ -116,7 +156,7 @@ def render_page(
     return content
 
 
-@mcp.tool()
+@_tool()
 def read_pdf(path: str, pages: list[int] | None = None, text_only: StrictBool = False) -> dict:
     """Read a PDF's structure: pages, text blocks with bounding boxes, form
     fields, and annotations. Coordinates are PDF points, origin top-left —
@@ -124,13 +164,13 @@ def read_pdf(path: str, pages: list[int] | None = None, text_only: StrictBool = 
     return read.extract(path, pages=pages, text_only=text_only)
 
 
-@mcp.tool()
+@_tool()
 def list_form_fields(path: str) -> list[dict]:
     """List every form field (name, type, current value, page, rect)."""
     return read.form_fields(path)
 
 
-@mcp.tool()
+@_tool()
 def apply_ops(path: str, ops: list[dict], output: str | None = None, dry_run: StrictBool = True) -> dict:
     """Apply a list of operations in one atomic edit. The default is a dry run
     so a batch containing a consequential operation cannot write without an
@@ -145,7 +185,7 @@ def apply_ops(path: str, ops: list[dict], output: str | None = None, dry_run: St
     return result
 
 
-@mcp.tool()
+@_tool()
 def highlight(
     path: str,
     page: int,
@@ -160,7 +200,7 @@ def highlight(
     )
 
 
-@mcp.tool()
+@_tool()
 def add_note(
     path: str,
     page: int,
@@ -175,7 +215,7 @@ def add_note(
     )
 
 
-@mcp.tool()
+@_tool()
 def fill_field(
     path: str,
     field: str,
@@ -189,7 +229,7 @@ def fill_field(
     )
 
 
-@mcp.tool()
+@_tool()
 def place_signature(
     path: str,
     page: int,
@@ -225,19 +265,19 @@ def place_signature(
     return result
 
 
-@mcp.tool()
+@_tool()
 def list_signatures() -> list[str]:
     """Names of the user's saved signatures (SVG in ~/Downloads/omapreview/signature/; also reads ~/.config/omepreview/signatures/)."""
     return signature.list_names()
 
 
-@mcp.tool()
+@_tool()
 def list_pages(path: str) -> dict:
     """List every page in a PDF with number, size, and rotation."""
     return pages_mod.list_pages(path)
 
 
-@mcp.tool()
+@_tool()
 def delete_pages(
     path: str,
     pages: list[int],
@@ -260,7 +300,7 @@ def delete_pages(
     return result
 
 
-@mcp.tool()
+@_tool()
 def rotate_pages(
     path: str,
     pages: list[int],
@@ -278,7 +318,7 @@ def rotate_pages(
     )
 
 
-@mcp.tool()
+@_tool()
 def move_pages(
     path: str,
     pages: list[int],
@@ -296,7 +336,7 @@ def move_pages(
     )
 
 
-@mcp.tool()
+@_tool()
 def insert_pages(
     path: str,
     after: int,
@@ -329,7 +369,7 @@ def insert_pages(
     return engine.apply(path, [op], output=output, dry_run=dry_run)
 
 
-@mcp.tool()
+@_tool()
 def extract_pages(
     path: str,
     pages: list[int],
@@ -345,7 +385,7 @@ def extract_pages(
     )
 
 
-@mcp.tool()
+@_tool()
 def delete_annotation(
     path: str,
     page: int,
@@ -370,7 +410,7 @@ def delete_annotation(
     return result
 
 
-@mcp.tool()
+@_tool()
 def redact(
     path: str,
     page: int,
@@ -402,7 +442,7 @@ def redact(
     return result
 
 
-@mcp.tool()
+@_tool()
 def crop_pages(
     path: str,
     pages: list[int],
@@ -422,7 +462,7 @@ def crop_pages(
     )
 
 
-@mcp.tool()
+@_tool()
 def add_shape(
     path: str,
     page: int,
@@ -454,7 +494,7 @@ def add_shape(
     return engine.apply(path, [op], output=output)
 
 
-@mcp.tool()
+@_tool()
 def flatten_pdf(
     path: str,
     output: str | None = None,

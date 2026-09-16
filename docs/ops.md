@@ -74,6 +74,14 @@ raw PNG byte check happens after encoding. MCP then caps the base64 image
 payload at 10,666,668 bytes before returning it. Both interfaces preserve the
 PDF bytes.
 
+### MCP errors
+
+Expected validation, input, file and document-domain failures return an MCP
+tool result with `isError: true` and actionable text, such as the missing path,
+invalid page or clip, unknown field name, or failed text match. Unexpected
+failures remain masked as the generic `Error executing tool NAME` response.
+This keeps recovery guidance available without exposing crash details.
+
 ## Post-save observation
 
 Read the destination after every write. Use `omepreview read OUT --json` or
