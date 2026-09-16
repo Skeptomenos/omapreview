@@ -1,7 +1,7 @@
 """Editorial 18×18 cairo glyphs used on the overlay rail.
 
-Undo / redo are open circular arrows with the head at the top: undo
-points up-left (counterclockwise), redo points up-right.
+Undo / redo curve over the top, with heads at the upper-left and
+upper-right respectively.
 """
 
 from __future__ import annotations
@@ -20,26 +20,21 @@ def _ink(ctx, fg, width: float = 1.65) -> None:
 
 
 def paint_undo(ctx, fg) -> None:
-    """Counterclockwise open arrow; head at the upper-left, pointing up-left."""
+    """Upper arc returning to an arrowhead at the upper-left."""
     _ink(ctx, fg)
-    # Tail on the right, curve under, rise up the left side.
-    ctx.move_to(14.0, 10.6)
-    ctx.curve_to(14.0, 15.4, 3.6, 15.4, 3.8, 8.0)
-    ctx.stroke()
-    # Chevron pointing up-left.
-    ctx.move_to(7.6, 7.0)
-    ctx.line_to(3.2, 4.2)
-    ctx.line_to(3.4, 8.6)
+    # Tail on the right; the arch joins the head without a gap.
+    ctx.move_to(14.0, 13.0)
+    ctx.curve_to(16.0, 5.0, 7.0, 2.0, 3.0, 7.0)
+    ctx.move_to(3.0, 3.0)
+    ctx.line_to(3.0, 7.0)
+    ctx.line_to(7.0, 7.0)
     ctx.stroke()
 
 
 def paint_redo(ctx, fg) -> None:
-    """Clockwise open arrow; head at the upper-right, pointing up-right."""
-    _ink(ctx, fg)
-    ctx.move_to(4.0, 10.6)
-    ctx.curve_to(4.0, 15.4, 14.4, 15.4, 14.2, 8.0)
-    ctx.stroke()
-    ctx.move_to(10.4, 7.0)
-    ctx.line_to(14.8, 4.2)
-    ctx.line_to(14.6, 8.6)
-    ctx.stroke()
+    """Mirror of undo, with the arrowhead at the upper-right."""
+    ctx.save()
+    ctx.translate(18.0, 0.0)
+    ctx.scale(-1.0, 1.0)
+    paint_undo(ctx, fg)
+    ctx.restore()
