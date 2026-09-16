@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# Visitor install for omapreview 0.1.0 (no git clone of the app repo).
+# Visitor install for omapreview 0.1.1 (no git clone of the app repo).
 # Arch / Omarchy: pacman deps, GitHub tag tarball, ~/.local command + desktop.
 #
-#   curl -fsSL https://github.com/Skeptomenos/omapreview/releases/download/v0.1.0/install.sh | bash
+#   curl -fsSL https://github.com/Skeptomenos/omapreview/releases/download/v0.1.1/install.sh | bash
 set -euo pipefail
 
-VERSION="0.1.0"
-# Tag archive is the original v0.1.0 tree (no empty launch). Visitors get this
-# release-asset snapshot instead so Super+Space opens an empty editor.
-TARBALL_URL="https://github.com/Skeptomenos/omapreview/releases/download/v${VERSION}/omapreview-0.1.0-src.tar.gz"
-TARBALL_SHA256="87c20481548fda1d0e0240dbd8d3c93312f3d0b8de33a7fee13672bff120e90d"
+VERSION="0.1.1"
+# This release asset is built from the verified application tree so
+# Super+Space opens an empty editor without requiring a git clone.
+TARBALL_URL="https://github.com/Skeptomenos/omapreview/releases/download/v${VERSION}/omapreview-${VERSION}-src.tar.gz"
+TARBALL_SHA256="523f5ff7f11a488cc09b6f454f8fdfaf85268e2ed21faca314a84dfbc41a5b6d"
 PREFIX="${HOME}/.local/share/omapreview"
 BIN_DIR="${HOME}/.local/bin"
 APP_DIR="${HOME}/.local/share/applications"
@@ -63,7 +63,6 @@ sed \
   "${SRC}/share/omapreview.desktop" > "${DESKTOP_DST}"
 rm -f "${APP_DIR}/omepreview.desktop"
 
-# Older release archives predate the custom icon and retain their PDF icon.
 if [[ -f "${SRC}/share/icons/omapreview.png" ]]; then
   install -Dm644 "${SRC}/share/icons/omapreview.png" \
     "${HOME}/.local/share/icons/hicolor/512x512/apps/omapreview.png"

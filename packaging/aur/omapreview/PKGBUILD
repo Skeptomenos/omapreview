@@ -1,6 +1,6 @@
 # Maintainer: David Hapunkt <Skeptomenos@users.noreply.github.com>
 pkgname=omapreview
-pkgver=0.1.0
+pkgver=0.1.1
 pkgrel=1
 pkgdesc="Preview-style PDF viewer and reviewer for Linux"
 arch=('any')
@@ -12,9 +12,9 @@ optdepends=(
   'omarchy: bar widget and menu-based PDF picker'
 )
 makedepends=('python-build' 'python-installer' 'python-hatchling' 'python-wheel')
-# GitHub tag archive (not a clone of the app repo). Extracts to omapreview-$pkgver.
-source=("$pkgname-$pkgver.tar.gz::https://github.com/Skeptomenos/omapreview/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('67e1aa28845b4b4e016a2d6b38a065d9c501abef53f482330c819ef0068fb8bc')
+# Deterministic application source asset; extracts to omapreview-$pkgver.
+source=("$pkgname-$pkgver-src.tar.gz::https://github.com/Skeptomenos/omapreview/releases/download/v$pkgver/omapreview-$pkgver-src.tar.gz")
+sha256sums=('523f5ff7f11a488cc09b6f454f8fdfaf85268e2ed21faca314a84dfbc41a5b6d')
 
 build() {
   cd "$pkgname-$pkgver"
@@ -27,10 +27,7 @@ package() {
 
   install -Dm755 bin/omepreview-pick "$pkgdir/usr/bin/omepreview-pick"
   install -Dm644 share/omapreview.desktop "$pkgdir/usr/share/applications/omapreview.desktop"
-  # The pinned v0.1.0 archive predates the custom icon.
-  if [[ -f share/icons/omapreview.png ]]; then
-    install -Dm644 share/icons/omapreview.png "$pkgdir/usr/share/icons/hicolor/512x512/apps/omapreview.png"
-  fi
+  install -Dm644 share/icons/omapreview.png "$pkgdir/usr/share/icons/hicolor/512x512/apps/omapreview.png"
 
   install -d "$pkgdir/usr/share/omapreview"
   cp -r shell-plugin "$pkgdir/usr/share/omapreview/shell-plugin"

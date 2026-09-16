@@ -58,11 +58,11 @@ bbox from `read` as a precise target for an operation.
 
 ### Arch / Omarchy
 
-The visitor installer fetches the v0.1.0 release, installs its Arch
+The visitor installer fetches the v0.1.1 release, installs its Arch
 dependencies, and adds the command and desktop entry for your user:
 
 ```bash
-curl -fsSL https://github.com/Skeptomenos/omapreview/releases/download/v0.1.0/install.sh | bash
+curl -fsSL https://github.com/Skeptomenos/omapreview/releases/download/v0.1.1/install.sh | bash
 ```
 
 Then open **omapreview** from the launcher with Super+Space. The editor starts

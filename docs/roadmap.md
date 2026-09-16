@@ -40,6 +40,14 @@
 - [x] Complete `operation_schema` / `omepreview operations` discovery catalog
 - [x] Saved-output reads and renders documented for every operation type
 
+**v0.1.1 — review remediation and distribution**
+- [x] Safe publication, stable editor history, precise page/object targets, and
+  signature/export validation across the GUI, CLI, and MCP paths
+- [x] Progressive agent skill with independent CLI/MCP workflows and
+  post-save verification recipes
+- [x] Deterministic application source asset with matching Arch and visitor
+  installation metadata
+
 **Preview parity — page surgery (M1)**
 - [x] Page ops: `rotate_pages`, `delete_pages`, `move_pages`, `insert_pages`,
   `extract_pages` — engine, CLI (`omepreview pages`), MCP, tests

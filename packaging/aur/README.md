@@ -14,11 +14,12 @@ Files:
 - `omapreview/PKGBUILD`
 - `omapreview/.SRCINFO`
 
-Source is the GitHub tag archive, not a clone of Skeptomenos/omapreview:
+Source is the deterministic GitHub release asset, not a clone of Skeptomenos/omapreview:
 
-`https://github.com/Skeptomenos/omapreview/archive/refs/tags/v0.1.0.tar.gz`
+`https://github.com/Skeptomenos/omapreview/releases/download/v0.1.1/omapreview-0.1.1-src.tar.gz`
 
-sha256 `67e1aa28845b4b4e016a2d6b38a065d9c501abef53f482330c819ef0068fb8bc`
+The SHA-256 pin is kept in both PKGBUILDs and `.SRCINFO` after the release
+asset is built from the final tag.
 
 ## Publish (machine with AUR SSH)
 
@@ -29,7 +30,7 @@ cp /path/to/app/packaging/PKGBUILD .
 # or: cp /path/to/app/packaging/aur/omapreview/PKGBUILD .
 makepkg --printsrcinfo > .SRCINFO
 git add PKGBUILD .SRCINFO
-git commit -m "omapreview 0.1.0"
+git commit -m "omapreview 0.1.1"
 git push origin master
 ```
 

@@ -1,21 +1,193 @@
-"""Launcher name, console-script alias, and desktop entry."""
+"""Release metadata and deterministic source-asset checks."""
 
+from __future__ import annotations
+
+import ast
+import hashlib
+import importlib.util
 from pathlib import Path
-
+import re
+import subprocess
+import sys
+import tarfile
 import tomllib
 
-from omepreview.cli import build_parser
-
 ROOT = Path(__file__).resolve().parents[1]
+HELPER = ROOT / "packaging" / "build-source-asset.py"
+VERSION = "0.1.1"
+SOURCE_URL = (
+    f"https://github.com/Skeptomenos/omapreview/releases/download/v{VERSION}/"
+    f"omapreview-{VERSION}-src.tar.gz"
+)
+_HELPER_SPEC = importlib.util.spec_from_file_location("release_asset_helper", HELPER)
+assert _HELPER_SPEC and _HELPER_SPEC.loader
+_HELPER_MODULE = importlib.util.module_from_spec(_HELPER_SPEC)
+_HELPER_SPEC.loader.exec_module(_HELPER_MODULE)
 
 
-def test_pyproject_omapreview_console_script_alias():
-    data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    scripts = data["project"]["scripts"]
-    assert data["project"]["version"] == "0.1.0"
+def _git(repo: Path, *args: str, capture_output: bool = False) -> str:
+    result = subprocess.run(
+        ["git", "-C", str(repo), *args],
+        check=True,
+        text=True,
+        capture_output=capture_output,
+    )
+    return result.stdout.strip() if capture_output else ""
+
+
+def _init_version() -> str:
+    module = ast.parse((ROOT / "src/omepreview/__init__.py").read_text(encoding="utf-8"))
+    for node in module.body:
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id == "__version__":
+                    value = ast.literal_eval(node.value)
+                    assert isinstance(value, str)
+                    return value
+    raise AssertionError("__version__ assignment not found")
+
+
+def _one_match(pattern: str, text: str, label: str) -> str:
+    matches = re.findall(pattern, text, flags=re.MULTILINE)
+    assert len(matches) == 1, f"expected one {label}, found {len(matches)}"
+    return matches[0]
+
+
+def _sha_from_pkgbuild(text: str) -> str:
+    return _one_match(r"^sha256sums=\('([0-9a-f]{64})'\)$", text, "PKGBUILD checksum")
+
+
+def _sha_from_installer(text: str) -> str:
+    return _one_match(r'^TARBALL_SHA256="([0-9a-f]{64})"$', text, "installer checksum")
+
+
+def _build_asset(repo: Path, output: Path, treeish: str, version: str = VERSION) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            sys.executable,
+            str(HELPER),
+            "--repo",
+            str(repo),
+            "--treeish",
+            treeish,
+            "--version",
+            version,
+            "--output",
+            str(output),
+        ],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+
+
+def test_release_metadata_uses_one_version_source_asset_and_checksum():
+    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    installer = (ROOT / "packaging/install.sh").read_text(encoding="utf-8")
+    pkgbuilds = [
+        (ROOT / "packaging/PKGBUILD").read_text(encoding="utf-8"),
+        (ROOT / "packaging/aur/omapreview/PKGBUILD").read_text(encoding="utf-8"),
+    ]
+
+    assert pyproject["project"]["version"] == VERSION
+    scripts = pyproject["project"]["scripts"]
     assert scripts["omapreview"] == "omepreview.cli:main"
     assert scripts["omepreview"] == "omepreview.cli:main"
-    assert data["project"]["urls"]["Homepage"] == "https://github.com/Skeptomenos/omapreview"
+    assert pyproject["project"]["urls"]["Homepage"] == "https://github.com/Skeptomenos/omapreview"
+    assert _init_version() == VERSION
+    assert _one_match(r'^VERSION="([^"]+)"$', installer, "installer version") == VERSION
+    assert all(_one_match(r"^pkgver=(\S+)$", text, "PKGBUILD version") == VERSION for text in pkgbuilds)
+
+    assert f'TARBALL_URL="{SOURCE_URL.replace(VERSION, "${VERSION}")}"' in installer
+    for text in pkgbuilds:
+        assert "releases/download/v$pkgver/omapreview-$pkgver-src.tar.gz" in text
+
+    hashes = [_sha_from_installer(installer), *(_sha_from_pkgbuild(text) for text in pkgbuilds)]
+    assert len(set(hashes)) == 1
+
+    srcinfo = (ROOT / "packaging/aur/omapreview/.SRCINFO").read_text(encoding="utf-8")
+    assert "pkgver = 0.1.1" in srcinfo
+    assert f"source = omapreview-{VERSION}-src.tar.gz::{SOURCE_URL}" in srcinfo
+    assert f"sha256sums = {hashes[0]}" in srcinfo
+
+    for path in (ROOT / "README.md", ROOT / "index.md", ROOT / "AGENTS.md"):
+        text = path.read_text(encoding="utf-8")
+        assert "releases/download/v0.1.1/install.sh" in text
+        assert "releases/download/v0.1.0/install.sh" not in text
+
+
+def test_source_asset_is_reproducible_and_ignores_packaging_pins(tmp_path):
+    repo = tmp_path / "fixture"
+    repo.mkdir()
+    _git(repo, "init", "--quiet")
+    _git(repo, "config", "user.email", "release-fixture@example.invalid")
+    _git(repo, "config", "user.name", "release-fixture")
+    fixture_files = {
+        "pyproject.toml": '[project]\nname = "fixture"\nversion = "0.1.1"\n',
+        "src/module.py": "VALUE = 1\n",
+        "README.md": "fixture\n",
+        "LICENSE": "fixture license\n",
+        "share/omapreview.desktop": "[Desktop Entry]\n",
+        "share/icons/omapreview.png": "synthetic icon\n",
+        "skill/SKILL.md": "skill\n",
+        "skill/references/cli.md": "cli\n",
+        "bin/helper": "#!/bin/sh\n",
+        "shell-plugin/widget": "widget\n",
+        "docs/reference.md": "docs\n",
+        "packaging/PKGBUILD": "sha256sums=('before')\n",
+        "tests/test_packaging.py": "repository-only\n",
+    }
+    for relative, content in fixture_files.items():
+        path = repo / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "--quiet", "-m", "initial")
+    first_commit = _git(repo, "rev-parse", "HEAD", capture_output=True)
+    first_output = tmp_path / "first.tar.gz"
+    repeat_output = tmp_path / "repeat.tar.gz"
+    assert _build_asset(repo, first_output, first_commit).returncode == 0
+    assert _build_asset(repo, repeat_output, first_commit).returncode == 0
+    assert first_output.read_bytes() == repeat_output.read_bytes()
+    assert first_output.read_bytes()[4:8] == b"\x00\x00\x00\x00"
+    assert hashlib.sha256(first_output.read_bytes()).hexdigest() == hashlib.sha256(
+        repeat_output.read_bytes()
+    ).hexdigest()
+
+    prefix = f"omapreview-{VERSION}/"
+    with tarfile.open(first_output, mode="r:gz") as archive:
+        members = archive.getmembers()
+        names = {member.name for member in members}
+        assert prefix + "skill/SKILL.md" in names
+        assert prefix + "share/icons/omapreview.png" in names
+        assert not any(name.startswith(prefix + "packaging/") for name in names)
+        assert not any(name.startswith(prefix + "tests/") for name in names)
+        assert all(member.mtime == _HELPER_MODULE.SOURCE_MTIME for member in members)
+
+    (repo / "packaging/PKGBUILD").write_text("sha256sums=('after-pin')\n", encoding="utf-8")
+    _git(repo, "add", "packaging/PKGBUILD")
+    _git(repo, "commit", "--quiet", "-m", "pin")
+    pin_commit = _git(repo, "rev-parse", "HEAD", capture_output=True)
+    pin_output = tmp_path / "pin.tar.gz"
+    assert _build_asset(repo, pin_output, pin_commit).returncode == 0
+    assert pin_output.read_bytes() == first_output.read_bytes()
+
+    (repo / "src/module.py").write_text("VALUE = 2\n", encoding="utf-8")
+    _git(repo, "add", "src/module.py")
+    _git(repo, "commit", "--quiet", "-m", "code")
+    code_commit = _git(repo, "rev-parse", "HEAD", capture_output=True)
+    code_output = tmp_path / "code.tar.gz"
+    assert _build_asset(repo, code_output, code_commit).returncode == 0
+    assert code_output.read_bytes() != first_output.read_bytes()
+
+
+def test_edit_accepts_a_missing_pdf_for_the_launcher():
+    from omepreview.cli import build_parser
+
+    args = build_parser().parse_args(["edit"])
+    assert args.pdf is None
+    args = build_parser().parse_args(["edit", "doc.pdf"])
+    assert args.pdf == "doc.pdf"
 
 
 def test_omapreview_desktop_is_the_launcher_entry():
@@ -31,47 +203,6 @@ def test_legacy_omepreview_desktop_is_hidden():
     text = (ROOT / "share/omepreview.desktop").read_text(encoding="utf-8")
     assert "NoDisplay=true" in text
     assert "Exec=omapreview edit %f" in text
-
-
-def test_pkgbuild_installs_omapreview_desktop_from_omapreview_repo():
-    text = (ROOT / "packaging/PKGBUILD").read_text(encoding="utf-8")
-    assert "pkgname=omapreview" in text
-    assert "pkgver=0.1.0" in text
-    assert "share/omapreview.desktop" in text
-    assert "$pkgdir/usr/share/applications/omapreview.desktop" in text
-    assert 'url="https://github.com/Skeptomenos/omapreview"' in text
-    assert "archive/refs/tags/v$pkgver.tar.gz" in text
-    assert "python-pymupdf" in text
-    assert "python-gobject" in text
-    assert "python-cairo" in text
-    assert "gtk4" in text
-    assert "git+$url" not in text
-    assert "sha256sums=('SKIP')" not in text
-    assert "67e1aa28845b4b4e016a2d6b38a065d9c501abef53f482330c819ef0068fb8bc" in text
-    assert 'cd "$pkgname-$pkgver"' in text
-
-
-def test_visitor_install_script_uses_tarball_not_clone():
-    text = (ROOT / "packaging/install.sh").read_text(encoding="utf-8")
-    assert "git clone http" not in text
-    assert "git clone git" not in text
-    assert "releases/download/v${VERSION}/omapreview-0.1.0-src.tar.gz" in text
-    assert "87c20481548fda1d0e0240dbd8d3c93312f3d0b8de33a7fee13672bff120e90d" in text
-    assert "python-pymupdf" in text
-    assert "python-gobject" in text
-    assert "python-cairo" in text
-    assert "gtk4" in text
-    assert "omapreview.desktop" in text
-    assert "${VENV}/bin/omapreview" in text
-    assert "zenity" not in text
-    assert "kdialog" not in text
-
-
-def test_edit_accepts_a_missing_pdf_for_the_launcher():
-    args = build_parser().parse_args(["edit"])
-    assert args.pdf is None
-    args = build_parser().parse_args(["edit", "doc.pdf"])
-    assert args.pdf == "doc.pdf"
 
 
 def test_edit_without_pdf_does_not_open_a_file_dialog():

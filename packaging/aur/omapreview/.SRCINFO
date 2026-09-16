@@ -1,6 +1,6 @@
 pkgbase = omapreview
 	pkgdesc = Preview-style PDF viewer and reviewer for Linux
-	pkgver = 0.1.0
+	pkgver = 0.1.1
 	pkgrel = 1
 	url = https://github.com/Skeptomenos/omapreview
 	arch = any
@@ -16,7 +16,7 @@ pkgbase = omapreview
 	depends = python-cairo
 	optdepends = python-mcp: MCP server for AI agents (omapreview-mcp)
 	optdepends = omarchy: bar widget and menu-based PDF picker
-	source = omapreview-0.1.0.tar.gz::https://github.com/Skeptomenos/omapreview/archive/refs/tags/v0.1.0.tar.gz
-	sha256sums = 67e1aa28845b4b4e016a2d6b38a065d9c501abef53f482330c819ef0068fb8bc
+	source = omapreview-0.1.1-src.tar.gz::https://github.com/Skeptomenos/omapreview/releases/download/v0.1.1/omapreview-0.1.1-src.tar.gz
+	sha256sums = 523f5ff7f11a488cc09b6f454f8fdfaf85268e2ed21faca314a84dfbc41a5b6d
 
 pkgname = omapreview
