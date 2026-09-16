@@ -69,6 +69,16 @@
 - [x] CLI `omepreview delete-annotation`, MCP `delete_annotation` (dry-run default)
 - [x] Manual checklist: [docs/preview-parity.md](preview-parity.md)
 
+## Current source — not yet released
+
+- [x] CLI/MCP application workflows, including editor sessions and exports:
+  [workflow contract](ops.md#application-workflows).
+- [x] Optional OCRmyPDF engine and checkout installation. OCR creates a verified
+  searchable copy through the shared operation: [Wave 1 evidence](evidence/ocr-wave1-2026-09-16.md).
+- [ ] OCR CLI/MCP progress, cancellation and agent verification recipes.
+- [ ] Native Recognize text workflow with safe saved-copy handoff.
+- [ ] Combined OCR interface acceptance. The [shared plan](../index.md) owns batch status.
+
 ## Next
 
 - **`omepreview sign --auto`** — signature-line detection: "Signature:"/"Sign
