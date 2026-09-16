@@ -87,7 +87,7 @@ python -m venv --system-site-packages .venv
 ### Optional OCR setup from current source
 
 The published v0.1.1 installer and Arch source asset have no OCR action. The
-following setup is for the current-source OCR candidate. In a checkout venv,
+following setup is for current source. In a checkout venv,
 run `.venv/bin/pip install -e '.[ocr]'` (or `'.[ocr,mcp]'` for both) to keep an
 existing user installation unchanged. To update the user command and desktop
 entry from that checkout, enable OCR, MCP, or both with the installer:

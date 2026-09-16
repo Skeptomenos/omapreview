@@ -75,9 +75,9 @@
   [workflow contract](ops.md#application-workflows).
 - [x] Optional OCRmyPDF engine and checkout installation. OCR creates a verified
   searchable copy through the shared operation: [Wave 1 evidence](evidence/ocr-wave1-2026-09-16.md).
-- [ ] OCR CLI/MCP progress, cancellation and agent verification recipes.
-- [ ] Native Recognize text workflow with safe saved-copy handoff.
-- [ ] Combined OCR interface acceptance. The [shared plan](../index.md) owns batch status.
+- [x] OCR CLI/MCP progress, cancellation and agent verification recipes.
+- [x] Native Recognize text workflow with safe saved-copy handoff.
+- [x] Combined OCR interface acceptance: [627 tests and live bridge evidence](evidence/ocr-wave2-2026-09-16.md). The [shared plan](../index.md) owns batch status.
 
 ## Next
 
