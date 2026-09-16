@@ -124,8 +124,8 @@ Open a PDF, then choose **Recognize text** in the editor rail or press
 Ctrl+Shift+O. Choose pages, installed OCR languages, and a new PDF path.
 **Review** checks the saved source and shows the destination. **Recognize
 text** starts the approved request. The editor stays responsive and shows
-phase progress and Cancel. A verified copy opens automatically if the editor
-has not changed and has no undo history. Otherwise, the copy stays saved and **Open copy**
+phase progress and Cancel. A verified copy with recognized text opens automatically
+if the editor has not changed and has no undo history. Otherwise, the copy stays saved and **Open copy**
 lets you choose when to switch documents. Save, discard, or cancel pending
 edits before starting or opening the copy.
 

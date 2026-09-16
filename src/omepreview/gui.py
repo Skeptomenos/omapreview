@@ -20,6 +20,7 @@ import math
 import os
 import sys
 import tempfile
+import threading
 from pathlib import Path
 
 import gi
@@ -518,8 +519,28 @@ def _bytes_fingerprint(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _ocr_can_auto_open(task: dict, editor: "Editor") -> bool:
-    return not task["session_changed"] and not editor.has_local_state()
+def _ocr_can_auto_open(task: dict, editor: "Editor", report: dict) -> bool:
+    return (report["status"] == "complete" and report["recognized_pages"] > 0
+            and not task["session_changed"] and not editor.has_local_state())
+
+
+def _ocr_completion_message(report: dict, output: str) -> str:
+    pages = report["pages"]
+    recognized = report["recognized_pages"]
+    title = "Saved searchable copy" if recognized and report["status"] == "complete" else "Saved OCR copy"
+    parts = [f"{title}: {Path(output).name}.", f"{recognized} page(s) recognized."]
+    skipped = [str(page["page"]) for page in pages if page["status"] == "skipped"]
+    review = [f"{page['page']} ({page['reason']})" for page in pages
+              if page["status"] == "needs_review"]
+    if skipped:
+        parts.append("Skipped pages: " + ", ".join(skipped) + ".")
+    if review:
+        parts.append("Needs review: " + ", ".join(review) + ".")
+    if recognized:
+        parts.append("Check recognized text against the scan.")
+    else:
+        parts.append("No new searchable text was verified.")
+    return " ".join(parts)
 
 
 class Editor:
@@ -1504,6 +1525,7 @@ def run(pdf: str | None = None, ops_file: str | None = None, session_id: str | N
     )
 
     bridges = []
+    ocr_preparations = []
 
     def on_activate(app):
         win = Gtk.ApplicationWindow(application=app)
@@ -1516,6 +1538,7 @@ def run(pdf: str | None = None, ops_file: str | None = None, session_id: str | N
         win.add_css_class("omapdf-editor")
         ed.window = win
         ocr_close_hook = {"fn": lambda: False}
+        ocr_panel = {"window": None}
 
         def on_close(_win):
             if ocr_close_hook["fn"]():
@@ -3669,7 +3692,15 @@ def run(pdf: str | None = None, ops_file: str | None = None, session_id: str | N
             if not ed.has_document():
                 toast("Open a PDF first (Ctrl+O)")
                 return
+            if ocr_panel["window"] is not None:
+                ocr_panel["window"].present()
+                return
+            ocr_preparations[:] = [item for item in ocr_preparations if item["thread"].is_alive()]
+            if any(item["thread"].is_alive() for item in ocr_preparations):
+                toast("Previous OCR check is stopping; try again shortly")
+                return
             panel = Gtk.Window(transient_for=win, title="Recognize text")
+            ocr_panel["window"] = panel
             panel.set_default_size(460, -1)
             box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
             for side in ("top", "bottom", "start", "end"):
@@ -3703,18 +3734,22 @@ def run(pdf: str | None = None, ops_file: str | None = None, session_id: str | N
             box.append(row)
             panel.set_child(box)
             state = {"closed": False, "proposal": None, "task_id": None, "output": None,
-                     "options_revision": 0}
+                     "options_revision": 0, "preparations": []}
             checks = []
 
             def off_thread(work, done):
-                import threading
+                cancel_event = threading.Event()
                 def run_work():
                     try:
-                        result, error = work(), None
+                        result, error = work(cancel_event), None
                     except Exception as exc:
                         result, error = None, exc
                     GLib.idle_add(lambda: (done(result, error), False)[1])
-                threading.Thread(target=run_work, daemon=True, name="omapreview-ocr-discovery").start()
+                thread = threading.Thread(target=run_work, name="omapreview-ocr-preparation")
+                record = {"thread": thread, "cancel": cancel_event}
+                state["preparations"].append(record)
+                ocr_preparations.append(record)
+                thread.start()
 
             def discovered(info, error):
                 if state["closed"]:
@@ -3777,7 +3812,8 @@ def run(pdf: str | None = None, ops_file: str | None = None, session_id: str | N
                     message.set_text(f"Source checked: {len(report['pages'])} pages, {eligible} selected without existing text. Save to {output}. Recognition needs review.")
                     start_btn.set_sensitive(True)
 
-                off_thread(lambda: engine.apply(source, [op], output=output, dry_run=True), checked)
+                off_thread(lambda cancel: engine.apply(source, [op], output=output, dry_run=True,
+                                                       cancel_event=cancel), checked)
 
             def start(_button):
                 proposal = state["proposal"]
@@ -3813,11 +3849,14 @@ def run(pdf: str | None = None, ops_file: str | None = None, session_id: str | N
                         message.set_text(f"OCR {task['status']}: {task['error']['message']}")
                     elif task["output"]:
                         state["output"] = task["output"]
-                        count = task["result"]["applied"][0]["ocr"]["recognized_pages"]
-                        message.set_text(f"Saved searchable copy: {Path(task['output']).name}. {count} page(s) recognized; review text accuracy.")
-                        if not _ocr_can_auto_open(task, ed):
+                        report = task["result"]["applied"][0]["ocr"]
+                        message.set_text(_ocr_completion_message(report, task["output"]))
+                        if not _ocr_can_auto_open(task, ed, report):
                             open_btn.set_visible(True)
-                            message.set_text(message.get_text() + " The editor changed or has undo history; use Open copy when ready.")
+                            if report["status"] != "complete" or report["recognized_pages"] == 0:
+                                message.set_text(message.get_text() + " Recognition is incomplete; open the copy only to inspect it.")
+                            else:
+                                message.set_text(message.get_text() + " The editor changed or has undo history; use Open copy when ready.")
                         else:
                             load_document(task["output"])
                     return False
@@ -3839,6 +3878,9 @@ def run(pdf: str | None = None, ops_file: str | None = None, session_id: str | N
 
             def closed(_panel):
                 state["closed"] = True
+                ocr_panel["window"] = None
+                for item in state["preparations"]:
+                    item["cancel"].set()
                 if state["task_id"]:
                     task = bridge.ocr_task.snapshot()
                     if task and task["status"] in ("running", "cancelling"):
@@ -3852,7 +3894,7 @@ def run(pdf: str | None = None, ops_file: str | None = None, session_id: str | N
             panel.connect("close-request", closed)
             panel.present()
             from .ocr import capabilities
-            off_thread(capabilities, discovered)
+            off_thread(lambda cancel: capabilities(cancel_event=cancel), discovered)
 
         ocr_btn.connect("clicked", lambda _b: decide_dirty(show_ocr_options))
 
@@ -4375,7 +4417,10 @@ def run(pdf: str | None = None, ops_file: str | None = None, session_id: str | N
             render_page()
             refresh_title()
 
-        bridge = Bridge(ed, GLib.idle_add, refresh_remote, win.close, session_id)
+        bridge = Bridge(
+            ed, GLib.idle_add, refresh_remote, win.close, session_id,
+            background_busy=lambda: any(item["thread"].is_alive() for item in ocr_preparations),
+        )
         bridges.append(bridge)
         closing_for_ocr = {"waiting": False, "ready": False}
 
@@ -4383,13 +4428,20 @@ def run(pdf: str | None = None, ops_file: str | None = None, session_id: str | N
             if closing_for_ocr["ready"]:
                 return False
             task = bridge.ocr_task.snapshot()
-            if task is None or task["status"] not in ("running", "cancelling"):
+            active_ocr = task is not None and task["status"] in ("running", "cancelling")
+            active_preparations = [item for item in ocr_preparations if item["thread"].is_alive()]
+            if not active_ocr and not active_preparations:
                 return False
-            bridge.ocr_task.cancel(task["task_id"])
+            if active_ocr:
+                bridge.ocr_task.cancel(task["task_id"])
+            for item in active_preparations:
+                item["cancel"].set()
             if not closing_for_ocr["waiting"]:
                 closing_for_ocr["waiting"] = True
                 def finish_close():
-                    if not bridge.ocr_task.join(0):
+                    if not bridge.ocr_task.join(0) or any(
+                        item["thread"].is_alive() for item in ocr_preparations
+                    ):
                         return True
                     closing_for_ocr["ready"] = True
                     win.close()
@@ -4409,6 +4461,9 @@ def run(pdf: str | None = None, ops_file: str | None = None, session_id: str | N
         for bridge in bridges:
             bridge.close()
             bridge.ocr_task.join()
+        for item in ocr_preparations:
+            item["cancel"].set()
+            item["thread"].join()
         ed.close()
     return 0
 

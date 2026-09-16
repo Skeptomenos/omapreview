@@ -220,11 +220,12 @@ def open_editor(path=None, ops=None):
 
 
 class Bridge:
-    def __init__(self, editor, dispatch, refresh, close, session=None):
+    def __init__(self, editor, dispatch, refresh, close, session=None, background_busy=None):
         self.editor = editor
         self.dispatch = dispatch
         self.refresh = refresh
         self.close_window = close
+        self.background_busy = background_busy or (lambda: False)
         self.session = session or uuid.uuid4().hex
         self.ocr_task = OCRTask()
         self.path = _path(self.session)
@@ -414,8 +415,13 @@ class Bridge:
         elif action == "save":
             result["save"] = ed.save_pending()
         elif action == "close":
+            active_ocr = bool(state["ocr"] and state["ocr"]["status"] in ("running", "cancelling"))
+            if active_ocr:
+                self.ocr_task.cancel(state["ocr"]["task_id"])
+            closing = active_ocr or self.background_busy()
             self.close_window()
-            return {"status": "closed", "session": self.session, "discarded_pending": state["dirty"]}
+            return {"status": "closing" if closing else "closed", "session": self.session,
+                    "discarded_pending": state["dirty"]}
         self.refresh()
         return {"status": "ok", **self.status(), **result}
 

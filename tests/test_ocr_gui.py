@@ -7,7 +7,7 @@ import pytest
 
 from omepreview import engine
 from omepreview.editor_session import Bridge, OCRTask
-from omepreview.gui import Editor, _ocr_can_auto_open
+from omepreview.gui import Editor, _ocr_can_auto_open, _ocr_completion_message
 from omepreview.ops import OpError
 from tests.data.make_docs import make_labeled_pdf
 
@@ -188,6 +188,8 @@ def test_bridge_close_cancels_worker_and_failed_preflight_has_no_output(monkeypa
                    "confirm": True, "output": str(output),
                    "op": {"op": "ocr", "expected_source_sha256": digest}})
     assert entered.wait(2)
+    closing = bridge.handle({"action": "close", "revision": state["revision"]})
+    assert closing["status"] == "closing"
     bridge.close()
     assert bridge.ocr_task.join(3)
     assert bridge.ocr_task.snapshot()["status"] == "cancelled"
@@ -199,12 +201,45 @@ def test_bridge_close_cancels_worker_and_failed_preflight_has_no_output(monkeypa
 def test_auto_open_requires_no_history_or_session_change(tmp_path):
     source = make_labeled_pdf(tmp_path / "scan.pdf", page_count=1)
     ed = Editor(str(source), None)
+    complete = {"status": "complete", "recognized_pages": 1}
     try:
-        assert _ocr_can_auto_open({"session_changed": False}, ed)
+        assert _ocr_can_auto_open({"session_changed": False}, ed, complete)
         ed.undo_stack.append({"kind": "pending"})
-        assert not _ocr_can_auto_open({"session_changed": False}, ed)
+        assert not _ocr_can_auto_open({"session_changed": False}, ed, complete)
         ed.open_path(str(source))
-        assert _ocr_can_auto_open({"session_changed": False}, ed)
-        assert not _ocr_can_auto_open({"session_changed": True}, ed)
+        assert _ocr_can_auto_open({"session_changed": False}, ed, complete)
+        assert not _ocr_can_auto_open({"session_changed": True}, ed, complete)
+        assert not _ocr_can_auto_open({"session_changed": False}, ed,
+                                      {"status": "needs_review", "recognized_pages": 0})
+        assert not _ocr_can_auto_open({"session_changed": False}, ed,
+                                      {"status": "complete", "recognized_pages": 0})
     finally:
+        ed.close()
+
+
+def test_incomplete_ocr_copy_message_names_pages_and_no_text():
+    incomplete = {"status": "needs_review", "recognized_pages": 0,
+                  "pages": [{"page": 1, "status": "needs_review", "reason": "no_text"},
+                            {"page": 2, "status": "skipped", "reason": "existing_text"}]}
+    message = _ocr_completion_message(incomplete, "/tmp/synthetic-copy.pdf")
+    assert "Saved OCR copy" in message and "searchable copy" not in message
+    assert "Needs review: 1 (no_text)" in message
+    assert "Skipped pages: 2" in message
+    assert "No new searchable text was verified" in message
+    complete = {"status": "complete", "recognized_pages": 1,
+                "pages": [{"page": 1, "status": "processed", "reason": "recognized"}]}
+    assert "Saved searchable copy" in _ocr_completion_message(complete, "/tmp/recognized.pdf")
+
+
+def test_bridge_close_reports_preparation_still_stopping(monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "runtime"))
+    source = make_labeled_pdf(tmp_path / "scan.pdf", page_count=1)
+    ed = Editor(str(source), None)
+    bridge = Bridge(ed, lambda callback: callback(), lambda: None, lambda: None,
+                    background_busy=lambda: True)
+    try:
+        state = bridge.status()
+        assert bridge.handle({"action": "close", "revision": state["revision"]})["status"] == "closing"
+    finally:
+        bridge.close()
         ed.close()
