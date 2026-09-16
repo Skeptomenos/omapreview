@@ -518,6 +518,10 @@ def _bytes_fingerprint(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def _ocr_can_auto_open(task: dict, editor: "Editor") -> bool:
+    return not task["session_changed"] and not editor.has_local_state()
+
+
 class Editor:
     def __init__(self, pdf: str | None, ops_file: str | None):
         pdf = (pdf or "").strip() or None
@@ -3619,15 +3623,18 @@ def run(pdf: str | None = None, ops_file: str | None = None, session_id: str | N
 
         save_btn.connect("clicked", on_save)
 
-        def decide_dirty(next_step):
-            if not (ed.pending or ed.page_preview.has_changes()):
+        def decide_dirty(next_step, *, include_history=False):
+            pending = bool(ed.pending or ed.page_preview.has_changes())
+            if not pending and not (include_history and ed.has_local_state()):
                 next_step()
                 return
             choice = Gtk.Window(transient_for=win, modal=True, title="Unsaved changes")
             box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
             for side in ("top", "bottom", "start", "end"):
                 getattr(box, f"set_margin_{side}")(16)
-            box.append(Gtk.Label(label="Save or discard your edits before OCR changes the open document.", wrap=True, xalign=0))
+            detail = ("Opening the copy clears edits and undo history. Save edits, discard them, or cancel."
+                      if include_history else "Save or discard your edits before recognizing text.")
+            box.append(Gtk.Label(label=detail, wrap=True, xalign=0))
             row = Gtk.Box(spacing=8, halign=Gtk.Align.END)
 
             def select(action):
@@ -3651,6 +3658,7 @@ def run(pdf: str | None = None, ops_file: str | None = None, session_id: str | N
                 button = Gtk.Button(label=label)
                 if action == "save":
                     button.add_css_class("suggested-action")
+                    button.set_sensitive(pending)
                 button.connect("clicked", lambda _b, a=action: select(a))
                 row.append(button)
             box.append(row)
@@ -3807,9 +3815,9 @@ def run(pdf: str | None = None, ops_file: str | None = None, session_id: str | N
                         state["output"] = task["output"]
                         count = task["result"]["applied"][0]["ocr"]["recognized_pages"]
                         message.set_text(f"Saved searchable copy: {Path(task['output']).name}. {count} page(s) recognized; review text accuracy.")
-                        if task["session_changed"]:
+                        if not _ocr_can_auto_open(task, ed):
                             open_btn.set_visible(True)
-                            message.set_text(message.get_text() + " The editor changed; use Open copy when ready.")
+                            message.set_text(message.get_text() + " The editor changed or has undo history; use Open copy when ready.")
                         else:
                             load_document(task["output"])
                     return False
@@ -3818,7 +3826,7 @@ def run(pdf: str | None = None, ops_file: str | None = None, session_id: str | N
 
             def open_copy(_button):
                 if state["output"]:
-                    decide_dirty(lambda: load_document(state["output"]))
+                    decide_dirty(lambda: load_document(state["output"]), include_history=True)
 
             def cancel(_button):
                 if state["task_id"]:

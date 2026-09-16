@@ -7,7 +7,7 @@ import pytest
 
 from omepreview import engine
 from omepreview.editor_session import Bridge, OCRTask
-from omepreview.gui import Editor
+from omepreview.gui import Editor, _ocr_can_auto_open
 from omepreview.ops import OpError
 from tests.data.make_docs import make_labeled_pdf
 
@@ -194,3 +194,17 @@ def test_bridge_close_cancels_worker_and_failed_preflight_has_no_output(monkeypa
     assert not output.exists()
     assert hashlib.sha256(source.read_bytes()).hexdigest() == digest
     ed.close()
+
+
+def test_auto_open_requires_no_history_or_session_change(tmp_path):
+    source = make_labeled_pdf(tmp_path / "scan.pdf", page_count=1)
+    ed = Editor(str(source), None)
+    try:
+        assert _ocr_can_auto_open({"session_changed": False}, ed)
+        ed.undo_stack.append({"kind": "pending"})
+        assert not _ocr_can_auto_open({"session_changed": False}, ed)
+        ed.open_path(str(source))
+        assert _ocr_can_auto_open({"session_changed": False}, ed)
+        assert not _ocr_can_auto_open({"session_changed": True}, ed)
+    finally:
+        ed.close()
