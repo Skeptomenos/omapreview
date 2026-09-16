@@ -73,7 +73,7 @@ def _system_python() -> str:
     raise RuntimeError("no system python found for the GTK drawing window")
 
 
-def _gtk_main(out_path: str, *, trackpad: bool = True, screenshot: str | None = None) -> int:
+def _gtk_main(out_path: str, *, trackpad: bool = True, screenshot: str | None = None, cancel_file: Path | None = None) -> int:
     import cairo
     import gi
 
@@ -463,6 +463,14 @@ def _gtk_main(out_path: str, *, trackpad: bool = True, screenshot: str | None = 
     status = None
     win = None
     app.connect("activate", on_activate)
+    cancel_timer = 0
+    if cancel_file is not None:
+        def check_cancel():
+            if cancel_file.exists():
+                app.quit()
+                return False
+            return True
+        cancel_timer = GLib.timeout_add(100, check_cancel)
     try:
         app.run(None)
         return 0 if saved else 1

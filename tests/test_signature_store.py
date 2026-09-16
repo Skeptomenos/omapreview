@@ -54,6 +54,7 @@ def test_png_import_still_accepted(tmp_path, monkeypatch):
 
 
 def test_get_falls_back_to_legacy_config_dir(tmp_path, monkeypatch):
+    monkeypatch.setattr(signature, "store_dir", lambda *, create=True: tmp_path / "empty-store")
     monkeypatch.delenv("OMEPREVIEW_SIGNATURE_DIR")
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
     legacy = tmp_path / "cfg" / "omepreview" / "signatures"

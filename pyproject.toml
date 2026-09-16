@@ -22,8 +22,8 @@ dev = ["pytest", "mcp>=1.2"]
 [project.scripts]
 omepreview = "omepreview.cli:main"
 omapreview = "omepreview.cli:main"
-omepreview-mcp = "omepreview.mcp_server:main"
-omapreview-mcp = "omepreview.mcp_server:main"
+omepreview-mcp = "omepreview.mcp_entry:main"
+omapreview-mcp = "omepreview.mcp_entry:main"
 
 [project.urls]
 Homepage = "https://github.com/Skeptomenos/omapreview"

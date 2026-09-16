@@ -350,7 +350,7 @@ def cmd_edit(args):
     from . import gui
 
     pdf = (args.pdf or "").strip() or None
-    raise SystemExit(gui.run(pdf, args.ops))
+    raise SystemExit(gui.run(pdf, args.ops, getattr(args, "session_id", None)))
 
 
 def cmd_pages(args):
@@ -445,6 +445,18 @@ def cmd_snapshot(args):
 def cmd_operations(args):
     """Print the complete operation catalog for CLI and agent discovery."""
     _emit(operation_catalog(), True)
+
+
+def cmd_workflow_schema(args):
+    from .workflows import catalog
+    _emit(catalog(), True)
+
+
+def cmd_workflow(args):
+    from .workflows import run
+    value = args.args
+    payload = json.load(sys.stdin) if value == "-" else json.loads(Path(value[1:]).read_text() if value.startswith("@") else value)
+    _emit(run(args.name, payload), True)
 
 
 def _cli_prog() -> str:
@@ -646,6 +658,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="PDF to open (omit for an empty editor; Open from the app)",
     )
     p.add_argument("--ops", help="ops JSON to load as draggable proposals")
+    p.add_argument("--session-id", help=argparse.SUPPRESS)
     p.set_defaults(func=cmd_edit)
 
     p = sub.add_parser("pages", help="list, delete, rotate, move, insert, or extract pages")
@@ -689,6 +702,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-o", "--output")
     p.set_defaults(func=cmd_snapshot)
 
+    p = sub.add_parser("workflow-schema", help="discover search, signatures, editor, export and clipboard workflows")
+    p.set_defaults(func=cmd_workflow_schema)
+    p = sub.add_parser("workflow", help="run a shared workflow with structured JSON arguments")
+    p.add_argument("name")
+    p.add_argument("--args", default="{}", help="JSON object, @file, or - for stdin")
+    p.set_defaults(func=cmd_workflow)
+    p = sub.add_parser("mcp", help="start the optional MCP server (stdio)")
+    p.set_defaults(func=lambda args: __import__("omepreview.mcp_entry", fromlist=["main"]).main())
     return parser
 
 
@@ -696,7 +717,7 @@ def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     try:
         args.func(args)
-    except (OpError, FileNotFoundError, ValueError, json.JSONDecodeError) as exc:
+    except (OpError, OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"omepreview: {exc}", file=sys.stderr)
         return 1
     return 0

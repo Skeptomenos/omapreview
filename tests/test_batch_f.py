@@ -196,7 +196,7 @@ def test_zip_export_is_private_collision_safe_and_atomic(tmp_path, monkeypatch):
     def fail(*_args, **_kwargs):
         raise OSError("injected ZIP publication failure")
 
-    monkeypatch.setattr(gui, "_publish_private_new", fail)
+    monkeypatch.setattr(__import__("omepreview.artifacts", fromlist=["_publish_private_new"]), "_publish_private_new", fail)
     with pytest.raises(OSError, match="injected ZIP publication failure"):
         gui.zip_file_private(source)
     assert first.read_bytes() == sentinel
@@ -218,7 +218,7 @@ def test_zip_export_retries_no_clobber_race_and_dangling_symlink(tmp_path, monke
             raise FileExistsError(path)
         return real_publish(path, data)
 
-    monkeypatch.setattr(gui, "_publish_private_new", first_race_then_publish)
+    monkeypatch.setattr(__import__("omepreview.artifacts", fromlist=["_publish_private_new"]), "_publish_private_new", first_race_then_publish)
     archive = gui.zip_file_private(source)
     assert archive == tmp_path / "race-2.zip"
     assert first.read_bytes() == injected

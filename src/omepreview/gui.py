@@ -507,67 +507,7 @@ def _signature_surface(path: str) -> cairo.ImageSurface:
     return cairo.ImageSurface.create_from_png(io.BytesIO(pix.tobytes("png")))
 
 
-def _unused_archive(path: str | Path) -> Path:
-    """Choose a free sibling archive path without replacing an existing file."""
-    source = Path(path)
-    candidate = source.with_suffix(".zip")
-    if candidate != source and not candidate.exists() and not candidate.is_symlink():
-        return candidate
-    n = 2
-    while True:
-        candidate = source.with_name(f"{source.stem}-{n}.zip")
-        if not candidate.exists() and not candidate.is_symlink():
-            return candidate
-        n += 1
-
-
-def _publish_private_new(path: str | Path, data: bytes) -> None:
-    """Create private bytes without replacing any existing directory entry."""
-    destination = Path(path)
-    fd, staged_name = tempfile.mkstemp(
-        prefix=f".{destination.name}.", suffix=".tmp", dir=str(destination.parent)
-    )
-    staged = Path(staged_name)
-    try:
-        os.fchmod(fd, FILE_MODE)
-        with os.fdopen(fd, "wb") as handle:
-            fd = None
-            handle.write(bytes(data))
-            handle.flush()
-            os.fsync(handle.fileno())
-        # link(2) publishes the complete staged inode without replacing any
-        # existing directory entry.  EEXIST is retried by zip_file_private.
-        os.link(staged, destination)
-        directory = os.open(destination.parent, os.O_RDONLY | os.O_DIRECTORY)
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
-    finally:
-        if fd is not None:
-            os.close(fd)
-        staged.unlink(missing_ok=True)
-
-
-def zip_file_private(path: str | Path) -> Path:
-    """Create a private, collision-safe ZIP containing one file."""
-    import zipfile
-
-    source = Path(path)
-    if not source.is_file():
-        raise FileNotFoundError(f"no such file to zip: {source}")
-    destination = _unused_archive(source)
-    archive = io.BytesIO()
-    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.write(source, source.name)
-    data = archive.getvalue()
-    while True:
-        try:
-            _publish_private_new(destination, data)
-            return destination
-        except FileExistsError:
-            # Another exporter claimed the candidate after the free-name scan.
-            destination = _unused_archive(source)
+from .artifacts import _unused_archive, _publish_private_new, zip_file_private
 
 
 def _file_fingerprint(path: str | Path) -> str:
@@ -1295,7 +1235,7 @@ class Editor:
             self.selected = proposed[0]
             self.page_no = proposed[0]["page"]
 
-    def to_ops(self) -> list[dict]:
+    def to_ops(self, *, execution_order: bool = True) -> list[dict]:
         ops = []
         for it in self.pending:
             page = it["page"] + 1
@@ -1348,7 +1288,7 @@ class Editor:
                 })
             elif it["kind"] == "delete_annot":
                 ops.append({"op": "delete_annotation", "page": page, "index": it["index"]})
-        return engine._order_ops(ops)
+        return engine._order_ops(ops) if execution_order else ops
 
     # ---- geometry -------------------------------------------------------
 
@@ -1507,13 +1447,15 @@ def pdf_open_dialog() -> Gtk.FileDialog:
     return dialog
 
 
-def run(pdf: str | None = None, ops_file: str | None = None) -> int:
+def run(pdf: str | None = None, ops_file: str | None = None, session_id: str | None = None) -> int:
     Gtk.Window.set_default_icon_name("omapreview")
     _sync_color_scheme()
     ed = Editor(pdf, ops_file)
     app = Gtk.Application(
         application_id="org.omepreview.Editor", flags=Gio.ApplicationFlags.NON_UNIQUE
     )
+
+    bridges = []
 
     def on_activate(app):
         win = Gtk.ApplicationWindow(application=app)
@@ -4137,6 +4079,19 @@ def run(pdf: str | None = None, ops_file: str | None = None) -> int:
                 )
             return False
 
+        from .editor_session import Bridge
+
+        def refresh_remote():
+            ed.invalidate_view()
+            ed.page_no = min(ed.page_no, max(0, ed.page_count() - 1))
+            sidebar_api["refresh"]()
+            retarget_watch()
+            render_page()
+            refresh_title()
+
+        bridge = Bridge(ed, GLib.idle_add, refresh_remote, win.close, session_id)
+        bridges.append(bridge)
+        win.connect("close-request", lambda _win: bridge.close() or False)
         win.present()
         GLib.idle_add(initial_render)
 
@@ -4144,6 +4099,8 @@ def run(pdf: str | None = None, ops_file: str | None = None) -> int:
     try:
         app.run(None)
     finally:
+        for bridge in bridges:
+            bridge.close()
         ed.close()
     return 0
 

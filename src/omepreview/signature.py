@@ -57,7 +57,7 @@ def legacy_store_dir() -> Path:
 
 
 def _validate_name(name: str) -> None:
-    if "/" in name or name.startswith("."):
+    if not name or not name.strip() or len(name) > 128 or any(c in name for c in "/\\\x00") or name.startswith("."):
         raise ValueError(f"invalid signature name {name!r}")
 
 

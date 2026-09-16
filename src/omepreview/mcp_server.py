@@ -531,6 +531,20 @@ def flatten_pdf(
     return result
 
 
+@_tool()
+def workflow_schema() -> dict:
+    """Discover all shared search/signature/editor/export/clipboard workflow schemas and safety/status contracts."""
+    from .workflows import catalog
+    return catalog()
+
+
+@_tool()
+def run_workflow(name: str, arguments: dict | None = None) -> dict:
+    """Run an application workflow. Call workflow_schema first for exact arguments. Same contracts as CLI workflow; interactive actions report handoff/status, not completed edits or delivery."""
+    from .workflows import run
+    return run(name, arguments)
+
+
 def main() -> None:
     mcp.run()
 
