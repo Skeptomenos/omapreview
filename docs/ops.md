@@ -591,7 +591,9 @@ live editor's small local task record. Start passes current `revision`, `confirm
 session_changed,cancellation_requested`. Output is null until publication;
 result is the engine envelope. States are running, cancelling, complete,
 needs_review, failed, cancelled, timed_out. Cancellation requested is not cleanup
-completion. The bridge never implicitly opens the result. The GUI executor ships
+completion. Editor `close` returns `closing` while active OCR cleanup finishes;
+ordinary close returns `closed`. This is separate from OCR task status.
+The bridge never implicitly opens the result. The GUI executor ships
 with the separate GUI batch; headless OCR requires no GUI session. Recorder
 handoff is separate from OCR execution.
 

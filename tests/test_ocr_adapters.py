@@ -22,8 +22,8 @@ MCP = Path(sys.executable).with_name('omapreview-mcp')
 
 class Wire:
     """Actual installed stdio, including EOF and cancellation notifications."""
-    def __init__(self, env, executable=None):
-        self.process = subprocess.Popen([str(executable or MCP)], stdin=subprocess.PIPE,
+    def __init__(self, env, executable=None, args=()):
+        self.process = subprocess.Popen([str(executable or MCP), *args], stdin=subprocess.PIPE,
                                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
         self.selector = selectors.DefaultSelector()
         self.selector.register(self.process.stdout, selectors.EVENT_READ)
@@ -380,3 +380,42 @@ def test_installed_deadline_cleanup(tmp_path,real_env,surface):
     assert result['error']['ocr']['status']=='timed_out'
     assert result['output'] is None and not target.exists()
     assert fingerprint(source)==sha and not list(tmp_path.glob('.omapreview-ocr-*'))
+
+
+def test_ordinary_apply_does_not_block_stdio_dispatch(tmp_path):
+    """A slow ordinary engine call must not hold up discovery/cancel dispatch."""
+    source=tmp_path/'source.pdf'
+    with fitz.open() as doc:
+        doc.new_page().insert_text((50,50),'SYNTHETIC CONTROL')
+        doc.save(source)
+    started=tmp_path/'started';release=tmp_path/'release'
+    script='''
+import sys,time
+from pathlib import Path
+from omepreview import mcp_server
+original=mcp_server.engine.apply
+started,release=map(Path,sys.argv[1:])
+def slow(*args,**kwargs):
+    started.write_text('started')
+    deadline=time.monotonic()+10
+    while not release.exists() and time.monotonic()<deadline:
+        time.sleep(.01)
+    return original(*args,**kwargs)
+mcp_server.engine.apply=slow
+mcp_server.main()
+'''
+    wire=Wire(dict(os.environ),sys.executable,('-c',script,str(started),str(release)))
+    try:
+        ordinary=wire.start('apply_ops',{'path':str(source),'ops':[{'op':'rotate_pages','pages':[1],'degrees':90}]})
+        wire.until(started.exists,timeout=5)
+        discovery=wire.start('operation_schema',{})
+        wire.until(lambda:any(f.get('id')==discovery for f in wire.frames),timeout=3)
+        assert not any(f.get('id')==ordinary for f in wire.frames)
+        release.touch()
+        wire.until(lambda:any(f.get('id')==ordinary for f in wire.frames))
+        result=next(f['result'] for f in wire.frames if f.get('id')==ordinary)
+        assert not result.get('isError') and data(result)['output'] is None
+        with fitz.open(source) as doc:assert doc[0].rotation==0
+    finally:
+        release.touch()
+        wire.close()

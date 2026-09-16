@@ -220,7 +220,10 @@ async def _apply_ops_request(path: str, ops: list[dict], ctx: Context,
     """
     dry_run = _strict_bool(dry_run, "dry_run")
     if not any(op.get("op") == "ocr" for op in ops):
-        return apply_ops(path, ops, output, dry_run)
+        import anyio
+        # Preserve the SDK's former sync-tool offload. Ordinary PDF work must
+        # not block progress/cancellation dispatch for concurrent OCR requests.
+        return await anyio.to_thread.run_sync(lambda: apply_ops(path, ops, output, dry_run))
     from .mcp_ocr import run_owned
     result = await run_owned(lambda cancel, progress: engine.apply(
         path, ops, output=output, dry_run=dry_run, cancel_event=cancel, progress=progress), ctx)
