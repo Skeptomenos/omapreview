@@ -235,3 +235,31 @@ def test_installers_expose_cli_aliases_optional_mcp_and_path_guidance():
     project = tomllib.loads((ROOT / "pyproject.toml").read_text())
     assert project["project"]["scripts"]["omapreview-mcp"] == "omepreview.mcp_entry:main"
     assert project["project"]["dependencies"] == ["pymupdf>=1.24"]
+
+
+def test_ocr_is_an_independent_optional_extra_and_arch_metadata_matches():
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]
+    extras = project["optional-dependencies"]
+    assert extras["ocr"] == ["ocrmypdf>=17.11.0,<17.12"]
+    assert "ocrmypdf" not in str(project["dependencies"])
+    assert "ocrmypdf" not in str(extras["mcp"])
+
+    canonical = (ROOT / "packaging/PKGBUILD").read_text()
+    aur = (ROOT / "packaging/aur/omapreview/PKGBUILD").read_text()
+    assert canonical == aur
+    srcinfo = (ROOT / "packaging/aur/omapreview/.SRCINFO").read_text()
+    for package in ("tesseract", "tesseract-data-eng", "ghostscript"):
+        assert f"'{package}:" in canonical
+        assert f"optdepends = {package}:" in srcinfo
+    assert "ocrmypdf" not in canonical
+    assert "ocrmypdf" not in srcinfo
+
+
+def test_release_installer_refuses_unshipped_ocr_before_system_changes():
+    installer = ROOT / "packaging/install.sh"
+    for args in (("--with-ocr",), ("--with-ocr", "--with-mcp")):
+        result = subprocess.run(
+            ["bash", str(installer), *args], text=True, capture_output=True, check=False
+        )
+        assert result.returncode == 2
+        assert "v0.1.1 has no OCR action" in result.stderr

@@ -9,6 +9,9 @@ license=('AGPL-3.0-or-later')
 depends=('python' 'python-pymupdf' 'gtk4' 'python-gobject' 'python-cairo')
 optdepends=(
   'python-mcp: MCP server for AI agents (omapreview-mcp)'
+  'tesseract: OCR recognition engine for a future OCR-enabled release'
+  'tesseract-data-eng: English OCR language data for a future OCR-enabled release'
+  'ghostscript: PDF rasterizer for a future OCR-enabled release'
   'omarchy: bar widget and menu-based PDF picker'
 )
 makedepends=('python-build' 'python-installer' 'python-hatchling' 'python-wheel')

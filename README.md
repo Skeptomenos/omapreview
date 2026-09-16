@@ -84,6 +84,40 @@ python -m venv --system-site-packages .venv
 .venv/bin/omapreview edit
 ```
 
+### Optional OCR setup from current source
+
+The published v0.1.1 installer and Arch source asset have no OCR action. The
+following setup is for the current-source OCR candidate. In a checkout venv,
+run `.venv/bin/pip install -e '.[ocr]'` (or `'.[ocr,mcp]'` for both) to keep an
+existing user installation unchanged. To update the user command and desktop
+entry from that checkout, enable OCR, MCP, or both with the installer:
+
+```bash
+bash packaging/install-user.sh --with-ocr
+# or: bash packaging/install-user.sh --with-mcp
+# or: bash packaging/install-user.sh --with-ocr --with-mcp
+```
+
+The checkout installer writes `~/.local/bin/omapreview` and the user desktop
+entry, so it replaces those links if they already exist. The OCR extra installs
+OCRmyPDF `>=17.11.0,<17.12`; only 17.11.0 is validated on Linux aarch64 with
+Python 3.14.7. Basic GUI and CLI installation does not require OCR. MCP is a
+separate extra.
+
+OCR also needs Tesseract, installed language data and a PDF rasterizer. On
+Arch / Omarchy, check the available packages with
+`pacman -Si tesseract tesseract-data-eng ghostscript`, then install any missing
+packages yourself. For another language, choose its matching
+`tesseract-data-<code>` package. No installer downloads language data or runs
+privileged OCR setup. List the languages actually available to Tesseract with
+`tesseract --list-langs`. Check the backend version with
+`.venv/bin/python -c 'from importlib.metadata import version; print(version("ocrmypdf"))'`.
+If a tool or language is missing, install it and rerun these checks before OCR.
+
+The Arch package definitions keep the v0.1.1 source URL and checksum. They
+list the system OCR tools as optional guidance for a future OCR release; they
+do not install OCRmyPDF or enable OCR in v0.1.1.
+
 ## Make omapreview your default PDF editor
 
 After installing on Arch / Omarchy, run this as your normal user, without sudo:

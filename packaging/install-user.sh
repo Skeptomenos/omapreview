@@ -3,6 +3,15 @@
 # Run from a clone (on omarchy-air: ~/omepreview). Does not need root.
 set -euo pipefail
 
+extras=()
+for option in "$@"; do
+  case "${option}" in
+    --with-ocr) extras+=(ocr) ;;
+    --with-mcp) extras+=(mcp) ;;
+    *) echo "Usage: bash packaging/install-user.sh [--with-ocr] [--with-mcp]" >&2; exit 2 ;;
+  esac
+done
+
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BIN_DIR="${HOME}/.local/bin"
 APP_DIR="${HOME}/.local/share/applications"
@@ -22,7 +31,13 @@ fi
 
 # Repair older plain venvs so the GUI can see system GTK dependencies.
 "${VENV}/bin/python" -m venv --system-site-packages "${VENV}"
-"${VENV}/bin/pip" install -e "${ROOT}"
+install_target="${ROOT}"
+if (( ${#extras[@]} )); then
+  IFS=,
+  install_target="${ROOT}[${extras[*]}]"
+  unset IFS
+fi
+"${VENV}/bin/pip" install -e "${install_target}"
 
 mkdir -p "${BIN_DIR}" "${APP_DIR}"
 install -Dm644 "${ROOT}/share/icons/omapreview.png" \
@@ -70,3 +85,6 @@ case ":${PATH}:" in
 esac
 echo "Optional MCP: ${VENV}/bin/python -m pip install 'mcp>=1.2'"
 echo "Then launch: ${BIN_DIR}/omapreview-mcp (stdio)."
+echo "Optional OCR (current source): bash packaging/install-user.sh --with-ocr"
+echo "Installed Tesseract languages: tesseract --list-langs"
+echo "For missing OCR system tools on Arch, install tesseract, tesseract-data-eng and ghostscript yourself."

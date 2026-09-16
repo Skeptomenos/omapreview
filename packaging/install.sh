@@ -5,7 +5,21 @@
 #   curl -fsSL https://github.com/Skeptomenos/omapreview/releases/download/v0.1.1/install.sh | bash
 set -euo pipefail
 
+extras=()
+with_ocr=false
+for option in "$@"; do
+  case "${option}" in
+    --with-ocr) extras+=(ocr); with_ocr=true ;;
+    --with-mcp) extras+=(mcp) ;;
+    *) echo "Usage: bash install.sh [--with-ocr] [--with-mcp]" >&2; exit 2 ;;
+  esac
+done
+
 VERSION="0.1.1"
+if [[ "${VERSION}" == "0.1.1" && "${with_ocr}" == true ]]; then
+  echo "omapreview install: published v0.1.1 has no OCR action. Use the current-source checkout installer with --with-ocr until an OCR release is published." >&2
+  exit 2
+fi
 # This release asset is built from the verified application tree so
 # Super+Space opens an empty editor without requiring a git clone.
 TARBALL_URL="https://github.com/Skeptomenos/omapreview/releases/download/v${VERSION}/omapreview-${VERSION}-src.tar.gz"
@@ -52,7 +66,13 @@ if [[ ! -x "${VENV}/bin/python" ]]; then
 fi
 "${VENV}/bin/python" -m venv --system-site-packages "${VENV}"
 "${VENV}/bin/python" -m pip install --upgrade pip
-"${VENV}/bin/pip" install "${SRC}"
+install_target="${SRC}"
+if (( ${#extras[@]} )); then
+  IFS=,
+  install_target="${SRC}[${extras[*]}]"
+  unset IFS
+fi
+"${VENV}/bin/pip" install "${install_target}"
 
 ln -sfn "${VENV}/bin/omapreview" "${BIN_DIR}/omapreview"
 ln -sfn "${VENV}/bin/omepreview" "${BIN_DIR}/omepreview"
@@ -96,3 +116,4 @@ echo "If it is missing, run: omarchy restart shell"
 
 echo "Optional MCP: ${VENV}/bin/python -m pip install 'mcp>=1.2'"
 echo "Then launch: ${BIN_DIR}/omapreview-mcp (stdio; no checkout required)."
+echo "OCR is available from current source only; v0.1.1 has no OCR action."
