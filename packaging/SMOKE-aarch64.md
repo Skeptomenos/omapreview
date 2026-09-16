@@ -21,14 +21,15 @@ Run on real hardware before publishing to AUR:
 cd packaging
 makepkg -f -si   # or -o for offline build
 omapreview --version
-omapreview-mcp --help 2>/dev/null || true   # needs python-mcp optdepend
+pacman -Si python-mcp                    # require version 2.2.0 or newer
+omapreview-mcp --help 2>/dev/null || true   # needs accepted MCP SDK
 omapreview edit /path/to/sample.pdf         # needs gtk4 + python-gobject
 ```
 
 | Check | Notes |
 |-------|--------|
 | `depends` resolve | `python`, `python-pymupdf` on aarch64 |
-| `optdepends` | `python-mcp`, Omarchy bar paths in `optdepends` comment |
+| `optdepends` | `python-mcp>=2.2.0`; if unavailable, use current-source `.[mcp]` in a checkout venv |
 | Desktop file | `share/omapreview.desktop` opens PDFs via `omapreview edit` |
 | Bar widget | `cp /usr/share/omapreview/shell-plugin/omapdf.bar ~/.config/omarchy/plugins/` |
 | GTK editor | Page sidebar (F9), redact tool (R), form click-fill |

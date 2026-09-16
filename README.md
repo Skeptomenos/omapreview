@@ -186,13 +186,16 @@ If your terminal cannot find the command, use `~/.local/bin/omapreview`, or run
 MCP is optional. After the release installer, enable it without a checkout:
 
 ```bash
-~/.local/share/omapreview/venv/bin/python -m pip install 'mcp>=1.2'
+~/.local/share/omapreview/venv/bin/python -m pip install 'mcp>=2.2.0'
 ~/.local/share/omapreview/venv/bin/omapreview-mcp
 ```
 
 For a checkout, use `.venv/bin/pip install -e '.[mcp]'`, then
-`.venv/bin/omapreview-mcp`. For Arch, install the optional `python-mcp` package,
-then run `omapreview-mcp`. Configure the absolute server path in an MCP client.
+`.venv/bin/omapreview-mcp`. The current-source MCP lifecycle requires SDK
+2.2.0 or newer. For an Arch package install, use `python-mcp` only if
+`pacman -Si python-mcp` reports version 2.2.0 or newer. The tested Arch ARM
+repository has 1.29.0, so use a checkout venv with `.[mcp]` there instead.
+Configure the absolute server path in an MCP client.
 New installers also link both `omapreview-mcp` and `omepreview-mcp` into
 `~/.local/bin`; current source additionally supports `omapreview mcp`.
 The base CLI works without MCP.

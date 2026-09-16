@@ -14,7 +14,7 @@ pkgbase = omapreview
 	depends = gtk4
 	depends = python-gobject
 	depends = python-cairo
-	optdepends = python-mcp: MCP server for AI agents (omapreview-mcp)
+	optdepends = python-mcp>=2.2.0: MCP server for AI agents (omapreview-mcp)
 	optdepends = tesseract: OCR recognition engine for a future OCR-enabled release
 	optdepends = tesseract-data-eng: English OCR language data for a future OCR-enabled release
 	optdepends = ghostscript: PDF rasterizer for a future OCR-enabled release

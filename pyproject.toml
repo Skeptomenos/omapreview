@@ -16,9 +16,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-mcp = ["mcp>=1.2"]
+mcp = ["mcp>=2.2.0"]
 ocr = ["ocrmypdf>=17.11.0,<17.12"]
-dev = ["pytest", "mcp>=1.2"]
+dev = ["pytest", "mcp>=2.2.0"]
 
 [project.scripts]
 omepreview = "omepreview.cli:main"

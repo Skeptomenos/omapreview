@@ -230,7 +230,7 @@ def test_installers_expose_cli_aliases_optional_mcp_and_path_guidance():
             assert command in script
         assert 'export PATH="$HOME/.local/bin:$PATH"' in script
         assert "No shell files were changed" in script
-        assert "mcp>=1.2" in script
+        assert "mcp>=2.2.0" in script
         assert "--system-site-packages" in script
     project = tomllib.loads((ROOT / "pyproject.toml").read_text())
     assert project["project"]["scripts"]["omapreview-mcp"] == "omepreview.mcp_entry:main"
@@ -243,11 +243,15 @@ def test_ocr_is_an_independent_optional_extra_and_arch_metadata_matches():
     assert extras["ocr"] == ["ocrmypdf>=17.11.0,<17.12"]
     assert "ocrmypdf" not in str(project["dependencies"])
     assert "ocrmypdf" not in str(extras["mcp"])
+    assert extras["mcp"] == ["mcp>=2.2.0"]
+    assert "mcp>=2.2.0" in extras["dev"]
 
     canonical = (ROOT / "packaging/PKGBUILD").read_text()
     aur = (ROOT / "packaging/aur/omapreview/PKGBUILD").read_text()
     assert canonical == aur
     srcinfo = (ROOT / "packaging/aur/omapreview/.SRCINFO").read_text()
+    assert "'python-mcp>=2.2.0:" in canonical
+    assert "optdepends = python-mcp>=2.2.0:" in srcinfo
     for package in ("tesseract", "tesseract-data-eng", "ghostscript"):
         assert f"'{package}:" in canonical
         assert f"optdepends = {package}:" in srcinfo

@@ -83,7 +83,7 @@ case ":${PATH}:" in
   *) echo 'Terminal setup: export PATH="$HOME/.local/bin:$PATH" (current shell only).'
      echo "Or use ${BIN_DIR}/omapreview directly. No shell files were changed." ;;
 esac
-echo "Optional MCP: ${VENV}/bin/python -m pip install 'mcp>=1.2'"
+echo "Optional MCP: ${VENV}/bin/python -m pip install 'mcp>=2.2.0'"
 echo "Then launch: ${BIN_DIR}/omapreview-mcp (stdio)."
 echo "Optional OCR (current source): bash packaging/install-user.sh --with-ocr"
 echo "Installed Tesseract languages: tesseract --list-langs"

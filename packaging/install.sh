@@ -114,6 +114,6 @@ echo "Open from the Omarchy menu: Super+Space, type omapreview, Enter."
 echo "The editor starts empty — Open (Ctrl+O) picks a PDF. No file dialog in Exec."
 echo "If it is missing, run: omarchy restart shell"
 
-echo "Optional MCP: ${VENV}/bin/python -m pip install 'mcp>=1.2'"
+echo "Optional MCP: ${VENV}/bin/python -m pip install 'mcp>=2.2.0'"
 echo "Then launch: ${BIN_DIR}/omapreview-mcp (stdio; no checkout required)."
 echo "OCR is available from current source only; v0.1.1 has no OCR action."
