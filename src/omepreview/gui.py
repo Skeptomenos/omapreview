@@ -13,6 +13,7 @@ omasnap's annotation bar (pen, shapes, minimal chrome).
 from __future__ import annotations
 
 import copy
+import hashlib
 import io
 import json
 import math
@@ -569,17 +570,30 @@ def zip_file_private(path: str | Path) -> Path:
             destination = _unused_archive(source)
 
 
+def _file_fingerprint(path: str | Path) -> str:
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def _bytes_fingerprint(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
 class Editor:
     def __init__(self, pdf: str | None, ops_file: str | None):
         pdf = (pdf or "").strip() or None
         if pdf:
             self.path = str(Path(pdf).expanduser().resolve())
-            self.doc = pymupdf.open(self.path)
-            self.page_preview = PagePreviewState(self.path)
+            source_bytes = Path(self.path).read_bytes()
+            self.doc = pymupdf.open(stream=source_bytes, filetype="pdf")
+            self.page_preview = PagePreviewState(
+                self.path, original_count=self.doc.page_count
+            )
+            self._source_fingerprint = _bytes_fingerprint(source_bytes)
         else:
             self.path = ""
             self.doc = None
             self.page_preview = PagePreviewState(None)
+            self._source_fingerprint = None
         self.page_no = 0
         self.zoom = 1.0
         self.pending: list[dict] = []
@@ -611,11 +625,92 @@ class Editor:
         self.redact_free_rect = False
         self.redact_save_as_copy = True
         self.redact_modal_shown = False
+        self.external_conflict = False
         if ops_file and self.has_document():
             self._load_proposals(ops_file)
 
     def has_document(self) -> bool:
         return bool(self.path) and self.doc is not None and not self.doc.is_closed
+
+    def has_local_state(self) -> bool:
+        """Whether this session contains edits or history tied to this file."""
+        return bool(
+            self.pending
+            or self.page_preview.has_changes()
+            or self.undo_stack
+            or self.redo_stack
+        )
+
+    def _ensure_source_current(self) -> None:
+        """Reject writes based on bytes that changed outside this session."""
+        if not self.path:
+            return
+        try:
+            current = _file_fingerprint(self.path)
+        except OSError as exc:
+            self.external_conflict = True
+            raise OpError(
+                f"file changed on disk and is no longer available — "
+                f"reopen it before continuing ({exc})"
+            ) from exc
+        if self._source_fingerprint is None:
+            self._source_fingerprint = current
+            return
+        if current != self._source_fingerprint:
+            self.external_conflict = True
+            raise OpError(
+                "file changed on disk — local edits and history are kept; "
+                "reload or reopen it before saving"
+            )
+
+    def note_external_change(self) -> None:
+        """Mark a disk change as a conflict without changing the live session."""
+        self.external_conflict = True
+
+    def handle_external_change(self) -> str:
+        """Handle a monitor event and return ``unchanged``, ``reloaded``, or ``conflict``."""
+        if not self.path or not Path(self.path).is_file():
+            self.note_external_change()
+            return "conflict"
+        try:
+            current = _file_fingerprint(self.path)
+        except OSError:
+            self.note_external_change()
+            return "conflict"
+        if self._source_fingerprint == current and not self.external_conflict:
+            return "unchanged"
+        if self.has_local_state() or self.external_conflict:
+            self.note_external_change()
+            return "conflict"
+        try:
+            self._reload_from_bytes(Path(self.path).read_bytes())
+        except Exception as exc:
+            self.note_external_change()
+            return f"conflict:{exc}"
+        return "reloaded"
+
+    def reload_from_disk(self) -> None:
+        """Discard local history and reload a changed file after explicit choice."""
+        if not self.path or not Path(self.path).is_file():
+            raise OpError("cannot reload — the file is no longer available")
+        self._reload_from_bytes(Path(self.path).read_bytes())
+
+    def _reload_from_bytes(self, data: bytes) -> None:
+        """Replace the active view with one immutable on-disk byte snapshot."""
+        new_doc = pymupdf.open(stream=data, filetype="pdf")
+        old_doc = self.doc
+        self.invalidate_view()
+        if old_doc is not None and not old_doc.is_closed:
+            old_doc.close()
+        self.doc = new_doc
+        self.page_preview.retarget(self.path, original_count=new_doc.page_count)
+        self.pending.clear()
+        self.undo_stack.clear()
+        self.redo_stack.clear()
+        self.selected = None
+        self.page_no = min(self.page_no, max(0, new_doc.page_count - 1))
+        self._source_fingerprint = _bytes_fingerprint(data)
+        self.external_conflict = False
 
     def _rebind_pending_pages(self, old_ids: list[int], new_ids: list[int]) -> None:
         """Keep ghosts and search hits on the same logical page after surgery."""
@@ -671,6 +766,8 @@ class Editor:
         return self.page_doc().page_count
 
     def checkpoint(self):
+        if self.has_document():
+            self._ensure_source_current()
         self.undo_stack.append({
             "kind": "pending",
             "pending": copy.deepcopy(self.pending),
@@ -685,7 +782,10 @@ class Editor:
             operations.extend(entry.get("page_ops", []))
             operations.extend(entry.get("page_ops_before", []))
         self.page_preview.prune_temp_sources({
-            str(op["source"]) for op in operations if "source" in op
+            str(op[key])
+            for op in operations
+            for key in ("source", "image")
+            if key in op
         })
 
     def close(self) -> None:
@@ -700,14 +800,17 @@ class Editor:
     def record_save(self, file_before: bytes, pending_before: list[dict], page_ops_before: list[dict]):
         """A save is an undoable step too: undoing it reverts the file and
         resurrects the saved items as editable ghosts."""
+        file_after = Path(self.path).read_bytes()
         self.undo_stack.append({
             "kind": "save",
             "file_before": file_before,
-            "file_after": Path(self.path).read_bytes(),
+            "file_after": file_after,
             "pending_before": pending_before,
             "page_ops_before": page_ops_before,
         })
         self.redo_stack.clear()
+        self._source_fingerprint = _bytes_fingerprint(file_after)
+        self.external_conflict = False
         self._prune_page_sources()
 
     def _restore_file(self, data: bytes):
@@ -726,7 +829,7 @@ class Editor:
             self.doc.close()
         try:
             atomic_write_private(path, data)
-            restored = pymupdf.open(self.path)
+            restored = pymupdf.open(stream=data, filetype="pdf")
         except BaseException:
             # A staged write normally fails before publication.  If a
             # post-rename observation fails, put the original bytes back
@@ -734,12 +837,14 @@ class Editor:
             try:
                 if path.read_bytes() != before:
                     atomic_write_private(path, before)
-                self.doc = pymupdf.open(self.path)
+                self.doc = pymupdf.open(stream=before, filetype="pdf")
             except BaseException:
                 self.doc = None
             self.invalidate_view()
             raise
         self.doc = restored
+        self._source_fingerprint = _bytes_fingerprint(data)
+        self.external_conflict = False
         self.invalidate_view()
 
     def _restore_editor_state(self, pending: list[dict], page_ops: list[dict]) -> None:
@@ -764,6 +869,7 @@ class Editor:
 
     def undo(self) -> bool:
         """Returns True when the file itself changed (a save was reverted)."""
+        self._ensure_source_current()
         if not self.undo_stack:
             return False
         entry = self.undo_stack[-1]
@@ -811,6 +917,7 @@ class Editor:
         return True
 
     def redo(self) -> bool:
+        self._ensure_source_current()
         if not self.redo_stack:
             return False
         entry = self.redo_stack[-1]
@@ -863,12 +970,16 @@ class Editor:
     def adopt_document(self, path: str) -> None:
         """Open *path* as the active document (watcher/title follow ``self.path``)."""
         new_path = str(Path(path).resolve())
+        source_bytes = Path(new_path).read_bytes()
+        new_doc = pymupdf.open(stream=source_bytes, filetype="pdf")
         if self.doc is not None and not self.doc.is_closed:
             self.doc.close()
         self.invalidate_view()
         self.path = new_path
-        self.doc = pymupdf.open(self.path)
-        self.page_preview.retarget(self.path)
+        self.doc = new_doc
+        self.page_preview.retarget(self.path, original_count=new_doc.page_count)
+        self._source_fingerprint = _bytes_fingerprint(source_bytes)
+        self.external_conflict = False
 
     def open_path(self, path: str) -> None:
         """Replace the session with a newly opened file (in-app Open)."""
@@ -896,6 +1007,7 @@ class Editor:
         """
         if not self.has_document():
             raise OpError("no PDF open — Open a file from the editor (Ctrl+O)")
+        self._ensure_source_current()
         markup_ops = self.to_ops()
         page_ops = copy.deepcopy(self.page_preview.page_ops)
         if not markup_ops and not page_ops:
@@ -904,6 +1016,15 @@ class Editor:
         operations = page_ops + markup_ops
         source = Path(self.path)
         file_before = source.read_bytes()
+        if (
+            self._source_fingerprint is not None
+            and _bytes_fingerprint(file_before) != self._source_fingerprint
+        ):
+            self.external_conflict = True
+            raise OpError(
+                "file changed on disk — local edits and history are kept; "
+                "reload or reopen it before saving"
+            )
         pending_before = copy.deepcopy(self.pending)
         page_ops_before = copy.deepcopy(self.page_preview.page_ops)
         created_copy: Path | None = None
@@ -927,13 +1048,19 @@ class Editor:
         try:
             # Keep the live editor and its scratch inputs intact until every
             # fallible part of the handoff has succeeded.
-            new_doc = pymupdf.open(str(target))
-            new_preview = PagePreviewState(target)
+            file_after = target.read_bytes()
+            # Confirm the published path is readable before handing the exact
+            # bytes used for history to the live editor. The stream open below
+            # prevents a concurrent replacement from retargeting the view.
+            probe = pymupdf.open(str(target))
+            probe.close()
+            new_doc = pymupdf.open(stream=file_after, filetype="pdf")
+            new_preview = PagePreviewState(target, original_count=new_doc.page_count)
             new_preview.on_identities_changed = self._rebind_pending_pages
             history = self.undo_stack + [{
                 "kind": "save",
                 "file_before": file_before,
-                "file_after": target.read_bytes(),
+                "file_after": file_after,
                 "pending_before": pending_before,
                 "page_ops_before": page_ops_before,
             }]
@@ -962,6 +1089,8 @@ class Editor:
         self.pending.clear()
         self.selected = None
         self.page_no = page_no
+        self._source_fingerprint = _bytes_fingerprint(history[-1]["file_after"])
+        self.external_conflict = False
         # Cleanup cannot turn a committed Save into a retryable failure.
         try:
             self.invalidate_view()
@@ -1436,9 +1565,9 @@ def run(pdf: str | None = None, ops_file: str | None = None) -> int:
 
         def refresh_title():
             dirty = ed.pending or ed.page_preview.has_changes()
-            dot = " •" if dirty else ""
+            marker = " ⚠" if ed.external_conflict else (" •" if dirty else "")
             if ed.has_document():
-                win.set_title(f"{Path(ed.path).name}{dot} — omepreview")
+                win.set_title(f"{Path(ed.path).name}{marker} — omepreview")
             else:
                 win.set_title("omapreview")
             save_style_hook["fn"]()
@@ -3934,31 +4063,37 @@ def run(pdf: str | None = None, ops_file: str | None = None) -> int:
         # it, refresh the view — the GUI half of the ask-the-agent loop.
 
         def on_disk_change(_m, _f, _o, event):
-            if event != Gio.FileMonitorEvent.CHANGES_DONE_HINT:
+            if event not in (
+                Gio.FileMonitorEvent.CHANGES_DONE_HINT,
+                Gio.FileMonitorEvent.DELETED,
+                Gio.FileMonitorEvent.MOVED_OUT,
+                Gio.FileMonitorEvent.MOVED,
+            ):
                 return
             if GLib.get_monotonic_time() < write_guard["until"]:
                 return
 
             def reload():
-                if not ed.has_document() or not Path(ed.path).is_file():
+                if not ed.has_document():
                     return False
-                try:
-                    if ed.doc is not None and not ed.doc.is_closed:
-                        ed.doc.close()
-                    ed.doc = pymupdf.open(ed.path)
-                except Exception:
+                outcome = ed.handle_external_change()
+                if outcome == "unchanged":
+                    return False
+                if outcome.startswith("conflict"):
+                    refresh_title()
+                    toast(
+                        "File changed on disk — local edits/history kept; "
+                        "reload or reopen before saving"
+                    )
                     return False
                 ed.invalidate_view()
                 n_pages = ed.page_count()
                 if n_pages:
                     ed.page_no = min(ed.page_no, n_pages - 1)
-                ed.page_preview.clear(preserve_temp_sources=True)
-                ed._prune_page_sources()
+                sidebar_api["refresh"]()
                 render_page()
-                if ed.pending or ed.page_preview.has_changes():
-                    toast("Changed on disk — view refreshed; your unsaved items are kept")
-                else:
-                    toast("Updated by another program — reloaded")
+                refresh_title()
+                toast("Updated by another program — reloaded")
                 return False
 
             GLib.timeout_add(200, reload)

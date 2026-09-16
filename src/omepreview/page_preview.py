@@ -124,24 +124,34 @@ def _pdf_page_count(path: str) -> int:
 class PagePreviewState:
     """Tracks page-op ghosts and a scratch PDF that reflects them."""
 
-    def __init__(self, source: str | Path | None = None):
+    def __init__(
+        self,
+        source: str | Path | None = None,
+        *,
+        original_count: int | None = None,
+    ):
         self.page_ops: list[dict] = []
         self.scratch_path: str | None = None
         self.inserted_pages: set[int] = set()  # 1-based pages in scratch view
         self._temp_sources: list[Path] = []
+        self._source_aliases: dict[str, set[str]] = {}
         self.on_identities_changed: Callable[[list[int], list[int]], None] | None = None
         if source is None:
             self.source = ""
             self._original_count = 0
         else:
             self.source = str(Path(source).resolve())
-            self._original_count = _pdf_page_count(self.source)
+            self._original_count = (
+                _pdf_page_count(self.source)
+                if original_count is None
+                else int(original_count)
+            )
 
     def identities(self) -> list[int]:
         """Stable ids for the current page order (index 0 = first visible page)."""
         return identities_from_ops(self._original_count, self.page_ops)
 
-    def retarget(self, source: str | Path):
+    def retarget(self, source: str | Path, *, original_count: int | None = None):
         """Point the preview at a different file (e.g. after save-as-copy)."""
         self._drop_scratch()
         self._drop_temp_sources()
@@ -149,7 +159,11 @@ class PagePreviewState:
         self.inserted_pages.clear()
         self.scratch_path = None
         self.source = str(Path(source).resolve())
-        self._original_count = _pdf_page_count(self.source)
+        self._original_count = (
+            _pdf_page_count(self.source)
+            if original_count is None
+            else int(original_count)
+        )
 
     def has_changes(self) -> bool:
         return bool(self.page_ops)
@@ -174,17 +188,26 @@ class PagePreviewState:
         for path in self._temp_sources:
             path.unlink(missing_ok=True)
         self._temp_sources.clear()
+        self._source_aliases.clear()
 
     def take_temp_sources_from(self, other: PagePreviewState) -> None:
         """Transfer owned inputs when a prepared preview replaces its state."""
         self._temp_sources.extend(other._temp_sources)
+        for snapshot, aliases in other._source_aliases.items():
+            self._source_aliases.setdefault(snapshot, set()).update(aliases)
         other._temp_sources.clear()
+        other._source_aliases.clear()
 
     def prune_temp_sources(self, referenced: set[str]) -> None:
         """Remove only owned inputs no longer used by edits or history."""
+        referenced = {str(Path(path)) for path in referenced}
+        referenced_with_aliases = set(referenced)
+        for snapshot, aliases in self._source_aliases.items():
+            if snapshot in referenced:
+                referenced_with_aliases.update(aliases)
         kept = []
         for path in self._temp_sources:
-            if str(path) in referenced:
+            if str(path) in referenced_with_aliases:
                 kept.append(path)
                 continue
             try:
@@ -194,33 +217,97 @@ class PagePreviewState:
                 # retryable failure. Keep ownership so cleanup can retry.
                 kept.append(path)
         self._temp_sources = kept
+        kept_paths = {str(path) for path in kept}
+        self._source_aliases = {
+            snapshot: aliases
+            for snapshot, aliases in self._source_aliases.items()
+            if snapshot in kept_paths
+        }
 
-    def _remember_source(self, path: str | Path) -> str:
-        p = Path(path)
-        self._temp_sources.append(p)
-        return str(p)
+    def _remember_source(self, path: str | Path, *, retain_source: bool = False) -> str:
+        """Snapshot an insertion input and return its immutable session path."""
+        source = Path(path).expanduser().resolve()
+        if not source.is_file():
+            raise FileNotFoundError(f"no such insertion input: {source}")
+        fd, name = tempfile.mkstemp(
+            prefix="omapreview-input-",
+            suffix=source.suffix or ".bin",
+            dir=str(scratch_dir()),
+        )
+        snapshot = Path(name)
+        os.close(fd)
+        try:
+            shutil.copyfile(source, snapshot)
+            chmod_private_file(snapshot)
+        except BaseException:
+            snapshot.unlink(missing_ok=True)
+            raise
+        self._temp_sources.append(snapshot)
+        if retain_source:
+            # Clipboard-created files are session-owned. Keep the original
+            # alongside the snapshot so the existing lifecycle can remove it
+            # after the edit leaves both history stacks.
+            self._temp_sources.append(source)
+            self._source_aliases.setdefault(str(snapshot), set()).add(str(source))
+        return str(snapshot)
+
+    def _forget_source(self, snapshot: str) -> None:
+        """Drop a just-created input snapshot after a rejected operation."""
+        aliases = self._source_aliases.pop(snapshot, set())
+        owned = {snapshot, *aliases}
+        kept = []
+        for path in self._temp_sources:
+            if str(path) in owned:
+                path.unlink(missing_ok=True)
+            else:
+                kept.append(path)
+        self._temp_sources = kept
 
     def rebuild(self) -> pymupdf.Document:
         """Apply page_ops to a temp copy; return the scratch document."""
-        self._drop_scratch()
-        self.inserted_pages.clear()
+        old_scratch = self.scratch_path
+        old_inserted = set(self.inserted_pages)
         if not self.source:
+            self.scratch_path = None
+            self.inserted_pages.clear()
+            if old_scratch:
+                Path(old_scratch).unlink(missing_ok=True)
             return pymupdf.open()
         # Undo can restore a different on-disk page count while retaining
         # pending insertions. Identities must start from that restored base.
         self._original_count = _pdf_page_count(self.source)
         if not self.page_ops:
-            return pymupdf.open(self.source)
+            doc = pymupdf.open(self.source)
+            self.scratch_path = None
+            self.inserted_pages.clear()
+            if old_scratch:
+                Path(old_scratch).unlink(missing_ok=True)
+            return doc
         fd, path = tempfile.mkstemp(suffix=".pdf", dir=str(scratch_dir()))
         os.close(fd)
-        shutil.copy(self.source, path)
-        chmod_private_file(path)
-        for op in self.page_ops:
-            engine.apply(path, [op], output=path)
-            chmod_private_file(path)
-        self.scratch_path = path
-        doc = pymupdf.open(path)
-        self.inserted_pages = self._mark_inserted_pages(doc)
+        candidate = Path(path)
+        doc = None
+        try:
+            shutil.copyfile(self.source, candidate)
+            chmod_private_file(candidate)
+            for op in self.page_ops:
+                engine.apply(candidate, [op], output=candidate)
+                chmod_private_file(candidate)
+            doc = pymupdf.open(candidate)
+            inserted = self._mark_inserted_pages(doc)
+        except BaseException:
+            if doc is not None and not doc.is_closed:
+                doc.close()
+            candidate.unlink(missing_ok=True)
+            # The last successful scratch remains the usable preview after a
+            # rejected rebuild. Its identity map is restored with it.
+            self.scratch_path = old_scratch
+            self.inserted_pages = old_inserted
+            raise
+        if old_scratch and old_scratch != str(candidate):
+            Path(old_scratch).unlink(missing_ok=True)
+        self.scratch_path = str(candidate)
+        self.inserted_pages = inserted
         return doc
 
     def open_view(self) -> pymupdf.Document:
@@ -283,14 +370,23 @@ class PagePreviewState:
         *,
         retain_source: bool = False,
     ):
-        src = self._remember_source(source) if retain_source else source
+        src = self._remember_source(source, retain_source=retain_source)
         op: dict = {"op": "insert_pages", "after": after, "source": src}
         if source_pages:
             op["source_pages"] = source_pages
-        self.append_op(op)
+        try:
+            self.append_op(op)
+        except BaseException:
+            self._forget_source(src)
+            raise
 
     def add_insert_image(self, after: int, image: str):
-        self.append_op({"op": "insert_pages", "after": after, "image": image})
+        snapshot = self._remember_source(image)
+        try:
+            self.append_op({"op": "insert_pages", "after": after, "image": snapshot})
+        except BaseException:
+            self._forget_source(snapshot)
+            raise
 
     def move_selection_to_after(self, selected_1based: list[int], after: int):
         if not selected_1based:
@@ -300,25 +396,10 @@ class PagePreviewState:
         self.add_move_pages(selected_1based, after)
 
     def _mark_inserted_pages(self, doc: pymupdf.Document) -> set[int]:
-        """Pages whose text does not match the original PAGE N labels are inserts."""
-        orig = pymupdf.open(self.source)
-        try:
-            orig_labels = {
-                n + 1: (orig[n].get_text("text").strip().split()[-1] if orig[n].get_text("text").strip() else "")
-                for n in range(orig.page_count)
-            }
-        finally:
-            orig.close()
-        inserted: set[int] = set()
-        for n in range(doc.page_count):
-            text = doc[n].get_text("text").strip()
-            label = text.split()[-1] if text else ""
-            if str(n + 1) not in orig_labels.values() and label not in orig_labels.values():
-                inserted.add(n + 1)
-            elif text == "":
-                inserted.add(n + 1)
-        # Also tag pages beyond original count when labels still line up
-        orig_count = len(orig_labels)
-        for n in range(orig_count + 1, doc.page_count + 1):
-            inserted.add(n)
-        return inserted
+        """Pages with a fresh identity are inserts, even if text is identical."""
+        identities = self.identities()
+        return {
+            n + 1
+            for n in range(min(doc.page_count, len(identities)))
+            if identities[n] >= self._original_count
+        }

@@ -46,8 +46,13 @@ compiled UI code. This directory holds its design notes.
 - **Icons**: hand-drawn cairo painters (`paint_*`) in one stroke language,
   colored by the widget's foreground (theme-proof); the pen icon draws in
   the current ink color and doubles as the color indicator.
-- **File watcher**: a `Gio.FileMonitor` reloads doc + thumbnails on
-  external changes, guarded against omepreview's own writes (save/undo/redo).
+- **File watcher**: a `Gio.FileMonitor` reloads clean sessions and thumbnails
+  on external changes, guarded against omepreview's own writes (save/undo/redo).
+  A dirty session keeps its local preview and history, marks a conflict, and
+  blocks Save/Undo/Redo until the user reloads or reopens the file.
+- **Page preview inputs**: PDF and image pages are copied into private session
+  storage when inserted. Later changes or removal of the picked file cannot
+  change the pending Save.
 - **Comments**: clicking near a saved annotation (select tool) pops its
   content — values are copied out of the PyMuPDF annot objects inside the
   iteration loop (they can go stale), and the popover opens via
