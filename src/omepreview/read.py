@@ -8,6 +8,7 @@ here can be passed straight back as an op target.
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 import pymupdf
@@ -21,6 +22,14 @@ _FIELD_TYPES = {
     pymupdf.PDF_WIDGET_TYPE_SIGNATURE: "signature",
     pymupdf.PDF_WIDGET_TYPE_BUTTON: "button",
 }
+
+
+def _fingerprint(blob: bytes) -> dict[str, str | int]:
+    return {
+        "algorithm": "sha256",
+        "value": hashlib.sha256(blob).hexdigest(),
+        "bytes": len(blob),
+    }
 
 
 def _fields(page: pymupdf.Page) -> list[dict]:
@@ -62,12 +71,18 @@ def extract(
     pdf = Path(pdf)
     if not pdf.is_file():
         raise FileNotFoundError(f"no such PDF: {pdf}")
-    doc = pymupdf.open(str(pdf))
+    blob = pdf.read_bytes()
+    doc = pymupdf.open(stream=blob, filetype="pdf")
     try:
         if doc.needs_pass:
-            return {"path": str(pdf), "error": "password-protected"}
+            return {
+                "path": str(pdf),
+                "error": "password-protected",
+                "source_fingerprint": _fingerprint(blob),
+            }
         result = {
             "path": str(pdf),
+            "source_fingerprint": _fingerprint(blob),
             "page_count": doc.page_count,
             "title": doc.metadata.get("title") or "",
             "has_form": bool(doc.is_form_pdf),

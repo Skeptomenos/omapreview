@@ -88,7 +88,8 @@ and **GTK editor** (`omepreview edit`) unless marked GUI-only.
 python -m pytest tests/ -q
 omepreview pages doc.pdf --list
 omepreview redact doc.pdf --page 1 --match "SECRET" -o out.pdf --dry-run --json
-omepreview delete-annotation doc.pdf --page 1 --index 0 -o out.pdf
+omepreview redact doc.pdf --page 1 --match "SECRET" -o out.pdf --confirm --json
+omepreview delete-annotation doc.pdf --page 1 --index 0 -o out.pdf --confirm
 omepreview shape doc.pdf --page 1 --shape rect --rect 72,100,200,180 -o out.pdf
 omepreview crop doc.pdf --page 1 --rect 50,50,500,750 -o out.pdf
 omepreview read out.pdf --json

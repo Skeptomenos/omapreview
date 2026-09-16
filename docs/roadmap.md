@@ -7,8 +7,8 @@
   form filling, signature placement with date stamp, freehand ink
 - [x] Structured read: text blocks + bboxes, form fields, annotations (with
   0-based `index` for delete)
-- [x] CLI with `--json`/`--dry-run` everywhere; atomic `apply` batches
-- [x] MCP server (`omepreview-mcp`) with confirm-before-signing posture
+- [x] CLI with `--json`/`--dry-run` everywhere; `--confirm` for consequential edits; atomic `apply` batches
+- [x] MCP server (`omepreview-mcp`) with confirm-before-signing and consequential-edit posture
 - [x] Signature store + `sig draw` GTK drawing window
 - [x] Claude Code skill: full PDF-assistant playbook with the precision
   ladder (anchors → grid snapshot → dry-run → visual verify → ghost handoff)
@@ -33,6 +33,12 @@
 - [x] Ask-your-agent (✦ → `omarchy agent prompt` with the file) + disk
   watcher that reloads the view when the agent saves changes
 - [x] Default-PDF-handler desktop file (`omepreview open` → the editor)
+
+**Verifiable CLI/MCP contract**
+- [x] `render_page` PNG content with source-bound geometry metadata and CLI
+  `snapshot --clip` parity
+- [x] Complete `operation_schema` / `omepreview operations` discovery catalog
+- [x] Saved-output reads and renders documented for every operation type
 
 **Preview parity — page surgery (M1)**
 - [x] Page ops: `rotate_pages`, `delete_pages`, `move_pages`, `insert_pages`,

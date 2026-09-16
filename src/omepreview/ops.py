@@ -21,6 +21,7 @@ points (1/72 inch) with the origin at the TOP-LEFT of the page, matching what
 
 from __future__ import annotations
 
+import copy
 import math
 
 MARKUP_STYLES = ("highlight", "underline", "strikeout", "squiggly")
@@ -46,15 +47,197 @@ OP_TYPES = (
 
 _ROTATE_DEGREES = (90, 180, 270, -90)
 
-# Keep malformed or adversarial JSON from reaching PyMuPDF with values that
-# can fail late, allocate unbounded resources, or create non-terminating
-# geometry loops. These limits are intentionally generous for normal PDFs.
 MAX_COORDINATE = 1_000_000.0
 MAX_DIMENSION = 100_000.0
 MAX_FONT_SIZE = 1_000.0
 MAX_STROKE_WIDTH = 1_000.0
 MAX_SIGNATURE_WIDTH = 10_000.0
 
+_NUMBER = {"type": "number", "finite": True}
+_COORDINATE = {
+    "type": "number",
+    "finite": True,
+    "minimum": -MAX_COORDINATE,
+    "maximum": MAX_COORDINATE,
+}
+_PAGE = {"type": "integer", "minimum": 1}
+_PAGES = {"type": "array", "items": _PAGE, "minItems": 1}
+_POINT = {"type": "array", "items": _COORDINATE, "minItems": 2, "maxItems": 2}
+_RECT = {"type": "array", "items": _COORDINATE, "minItems": 4, "maxItems": 4}
+_CROP_RECT = {
+    **_RECT,
+    "constraints": {"width_at_least": 1, "height_at_least": 1},
+}
+_COLOR = {"type": "array", "items": {"type": "number", "minimum": 0, "maximum": 1}, "minItems": 3, "maxItems": 3}
+_POSITIVE_DIMENSION = {
+    "type": "number",
+    "finite": True,
+    "exclusiveMinimum": 0,
+    "maximum": MAX_DIMENSION,
+}
+_FONT_SIZE = {
+    "type": "number",
+    "finite": True,
+    "exclusiveMinimum": 0.1,
+    "maximum": MAX_FONT_SIZE,
+}
+_STROKE_WIDTH = {
+    "type": "number",
+    "finite": True,
+    "exclusiveMinimum": 0,
+    "maximum": MAX_STROKE_WIDTH,
+}
+_SIGNATURE_WIDTH = {
+    "type": "number",
+    "finite": True,
+    "exclusiveMinimum": 0,
+    "maximum": MAX_SIGNATURE_WIDTH,
+}
+
+# This is deliberately data, not a second validator. ``validate`` remains the
+# executable contract; this catalog gives agents the complete public shape,
+# variants, defaults and examples without advertising fields the engine drops.
+OPERATION_CATALOG = {
+    "highlight": {
+        "required": ["op", "page"],
+        "variants": [
+            {"name": "text-match", "required": ["match"]},
+            {"name": "rectangle", "required": ["rect"]},
+        ],
+        "fields": {"op": {"const": "highlight"}, "page": _PAGE, "match": {"type": "string"}, "rect": _RECT, "style": {"type": "string", "enum": list(MARKUP_STYLES)}},
+        "defaults": {"style": "highlight"},
+        "examples": [
+            {"op": "highlight", "page": 1, "match": "termination clause"},
+            {"op": "highlight", "page": 1, "rect": [72, 130, 300, 148], "style": "underline"},
+        ],
+    },
+    "note": {
+        "required": ["op", "page", "at", "text"],
+        "fields": {"op": {"const": "note"}, "page": _PAGE, "at": _POINT, "text": {"type": "string"}},
+        "examples": [{"op": "note", "page": 2, "at": [450, 200], "text": "Check this figure"}],
+    },
+    "text_box": {
+        "required": ["op", "page", "rect", "text"],
+        "fields": {"op": {"const": "text_box"}, "page": _PAGE, "rect": _RECT, "text": {"type": "string"}, "size": _FONT_SIZE},
+        "defaults": {"size": 11},
+        "examples": [{"op": "text_box", "page": 2, "rect": [100, 300, 300, 330], "text": "N/A"}],
+    },
+    "fill_field": {
+        "required": ["op", "field", "value"],
+        "fields": {"op": {"const": "fill_field"}, "field": {"type": "string"}, "value": {"type": "string"}},
+        "examples": [{"op": "fill_field", "field": "tenant_name", "value": "Jane Doe"}],
+    },
+    "place_signature": {
+        "required": ["op", "page", "at"],
+        "fields": {"op": {"const": "place_signature"}, "page": _PAGE, "at": _POINT, "width": _SIGNATURE_WIDTH, "signature": {"type": "string"}, "date": {"type": "boolean"}},
+        "defaults": {"width": 180, "signature": "default", "date": False},
+        "examples": [{"op": "place_signature", "page": 4, "at": [120, 540], "width": 180, "signature": "default", "date": True}],
+    },
+    "ink": {
+        "required": ["op", "page", "strokes"],
+        "fields": {"op": {"const": "ink"}, "page": _PAGE, "strokes": {"type": "array", "items": {"type": "array", "items": _POINT, "minItems": 2}, "minItems": 1}, "color": _COLOR, "width": _STROKE_WIDTH},
+        "defaults": {"color": [0, 0, 0], "width": 2},
+        "examples": [{"op": "ink", "page": 1, "strokes": [[[100, 200], [120, 220], [140, 200]]]}],
+    },
+    "rotate_pages": {
+        "required": ["op", "pages", "degrees"],
+        "fields": {"op": {"const": "rotate_pages"}, "pages": _PAGES, "degrees": {"type": "integer", "enum": list(_ROTATE_DEGREES)}},
+        "examples": [{"op": "rotate_pages", "pages": [2, 3], "degrees": 90}],
+    },
+    "delete_pages": {
+        "required": ["op", "pages"],
+        "fields": {"op": {"const": "delete_pages"}, "pages": _PAGES},
+        "examples": [{"op": "delete_pages", "pages": [1, 4]}],
+    },
+    "move_pages": {
+        "required": ["op", "pages", "after"],
+        "fields": {"op": {"const": "move_pages"}, "pages": _PAGES, "after": {"type": "integer", "minimum": 0}},
+        "examples": [{"op": "move_pages", "pages": [5, 6], "after": 1}],
+    },
+    "insert_pages": {
+        "required": ["op", "after"],
+        "variants": [
+            {"name": "source-pdf", "required": ["source"], "optional": ["source_pages"]},
+            {"name": "blank", "required": ["blank"]},
+            {"name": "image", "required": ["image"]},
+        ],
+        "fields": {"op": {"const": "insert_pages"}, "after": {"type": "integer", "minimum": 0}, "source": {"type": "string"}, "source_pages": _PAGES, "blank": {"type": "object", "properties": {"count": {"type": "integer", "minimum": 1}, "width": _POSITIVE_DIMENSION, "height": _POSITIVE_DIMENSION}}, "image": {"type": "string"}},
+        "defaults": {"blank.count": 1, "blank.width": 595, "blank.height": 842},
+        "examples": [
+            {"op": "insert_pages", "after": 2, "source": "other.pdf", "source_pages": [1, 2]},
+            {"op": "insert_pages", "after": 0, "blank": {"count": 1, "width": 595, "height": 842}},
+            {"op": "insert_pages", "after": 1, "image": "scan.png"},
+        ],
+    },
+    "extract_pages": {
+        "required": ["op", "pages", "to"],
+        "fields": {"op": {"const": "extract_pages"}, "pages": _PAGES, "to": {"type": "string"}},
+        "examples": [{"op": "extract_pages", "pages": [2, 3], "to": "excerpt.pdf"}],
+    },
+    "redact": {
+        "required": ["op", "page"],
+        "variants": [
+            {"name": "text-match", "required": ["match"]},
+            {"name": "rectangle", "required": ["rect"]},
+        ],
+        "fields": {"op": {"const": "redact"}, "page": _PAGE, "match": {"type": "string"}, "rect": _RECT, "fill": _COLOR, "apply_now": {"type": "boolean"}},
+        "defaults": {"fill": [0, 0, 0], "apply_now": True},
+        "examples": [
+            {"op": "redact", "page": 1, "match": "secret token"},
+            {"op": "redact", "page": 1, "rect": [72, 400, 300, 430], "fill": [0, 0, 0]},
+        ],
+    },
+    "delete_annotation": {
+        "required": ["op", "page", "index"],
+        "fields": {"op": {"const": "delete_annotation"}, "page": _PAGE, "index": {"type": "integer", "minimum": 0}},
+        "examples": [{"op": "delete_annotation", "page": 1, "index": 0}],
+    },
+    "shape": {
+        "required": ["op", "page", "shape"],
+        "variants": [
+            {"name": "line-or-arrow", "shape": ["line", "arrow"], "required": ["from", "to"]},
+            {"name": "rectangle-or-oval", "shape": ["rect", "oval"], "required": ["rect"]},
+        ],
+        "fields": {"op": {"const": "shape"}, "page": _PAGE, "shape": {"type": "string", "enum": list(SHAPE_TYPES)}, "from": _POINT, "to": _POINT, "rect": _RECT, "color": _COLOR, "width": _STROKE_WIDTH},
+        "defaults": {"color": [0, 0, 0], "width": 2},
+        "examples": [
+            {"op": "shape", "page": 1, "shape": "line", "from": [72, 100], "to": [300, 200]},
+            {"op": "shape", "page": 1, "shape": "rect", "rect": [80, 80, 220, 160]},
+        ],
+    },
+    "crop_pages": {
+        "required": ["op", "pages", "rect"],
+        "fields": {"op": {"const": "crop_pages"}, "pages": _PAGES, "rect": _CROP_RECT},
+        "examples": [{"op": "crop_pages", "pages": [1], "rect": [72, 80, 500, 750]}],
+    },
+}
+
+
+def operation_catalog() -> dict:
+    """Return a detached, JSON-safe catalog of every supported operation."""
+    return {
+        "version": 1,
+        "coordinate_system": "unrotated CropBox-local PDF points, top-left origin; pages are 1-based",
+        "mutation_policy": {
+            "generic_apply_ops": "dry_run defaults to true; pass dry_run=false after approval",
+            "dedicated_consequential": {
+                "confirm_field": "confirm",
+                "signature_confirm_field": "confirmed",
+                "operations": [
+                    "place_signature",
+                    "delete_pages",
+                    "redact",
+                    "delete_annotation",
+                ],
+            },
+            "dedicated_other": "writes immediately; use generic apply_ops with dry_run=true to propose",
+        },
+        "verification_routes": ["read_pdf", "list_pages", "render_page"],
+        "operations": [
+            {"name": name, **copy.deepcopy(OPERATION_CATALOG[name])}
+            for name in OP_TYPES
+        ],
+    }
 
 class OpError(ValueError):
     """An operation failed validation or could not be applied."""

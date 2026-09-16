@@ -13,22 +13,107 @@ resolved edit for confirmation. Pass the explicit confirmation flag (or
 
 from __future__ import annotations
 
-from pydantic import StrictBool
+import base64
+import json
+
+from pydantic import StrictBool, StrictFloat, StrictInt
+
+try:
+    from mcp.types import CallToolResult, ImageContent, TextContent
+except ImportError:  # MCP SDK v2 also exposes these through mcp_types.
+    from mcp_types import CallToolResult, ImageContent, TextContent
 
 try:  # MCP SDK v2
     from mcp.server.mcpserver import MCPServer as _Server
 except ImportError:  # SDK v1
     from mcp.server.fastmcp import FastMCP as _Server
 
-from . import engine, pages as pages_mod, read, signature
+from . import engine, pages as pages_mod, read, render, signature
+from .ops import operation_catalog
 
 mcp = _Server("omepreview")
+StrictNumber = StrictInt | StrictFloat
+
+
+def _supports_structured_result() -> bool:
+    fields = getattr(CallToolResult, "model_fields", None)
+    if fields is None:
+        fields = getattr(CallToolResult, "__fields__", {})
+    return "structured_content" in fields or "structuredContent" in fields
 
 
 def _strict_bool(value: bool, name: str) -> bool:
     if not isinstance(value, bool):
         raise ValueError(f"{name} must be a boolean, got {value!r}")
     return value
+
+
+def _apply_guarded(
+    path: str,
+    ops: list[dict],
+    *,
+    output: str | None,
+    confirm: bool,
+    operation: str,
+) -> dict:
+    """Apply one dedicated mutation with the shared explicit-confirmation policy."""
+    confirm = _strict_bool(confirm, "confirm")
+    result = engine.apply(path, ops, output=output, dry_run=not confirm)
+    if not confirm:
+        result["needs_confirmation"] = (
+            f"Dry run only. Re-call with confirm=true after the user approves "
+            f"this {operation}."
+        )
+    return result
+
+
+@mcp.tool()
+def operation_schema() -> dict:
+    """Return the complete versioned catalog for all supported operations.
+
+    Call this before constructing ``apply_ops`` payloads. It lists required
+    fields, variants, defaults and examples from the same operation vocabulary
+    used by the engine and GUI.
+    """
+    return operation_catalog()
+
+
+@mcp.tool()
+def render_page(
+    path: str,
+    page: StrictInt = 1,
+    scale: StrictNumber = 2.0,
+    grid: StrictNumber | None = None,
+    clip: list[StrictNumber] | None = None,
+) -> CallToolResult:
+    """Render a PDF page as a PNG image with source-bound geometry metadata.
+
+    ``page`` is 1-based. ``clip`` is [x0,y0,x1,y1] in unrotated CropBox-local
+    PDF points, the same coordinate system used by ``read_pdf`` and edits.
+    The result contains an actual image content block, a JSON metadata text
+    block and structured metadata. Rendering is read-only.
+    """
+    png, metadata = render.render_page_bytes(
+        path, page=page, scale=scale, grid=grid, clip=clip
+    )
+    encoded = base64.b64encode(png)
+    if len(encoded) > render.MAX_RENDER_BASE64_BYTES:
+        raise ValueError(
+            f"base64 render response is {len(encoded):,} bytes; limit is "
+            f"{render.MAX_RENDER_BASE64_BYTES:,}"
+        )
+    image = ImageContent(
+        type="image", data=encoded.decode("ascii"), mimeType="image/png"
+    )
+    metadata_text = TextContent(
+        type="text", text=json.dumps(metadata, sort_keys=True, separators=(",", ":"))
+    )
+    content = [metadata_text, image]
+    if _supports_structured_result():
+        return CallToolResult(content=content, structuredContent=metadata)
+    # FastMCP 1.2 accepts content blocks and lists, but serializes a returned
+    # CallToolResult as one text block. Keep the actual image visible there.
+    return content
 
 
 @mcp.tool()
@@ -61,7 +146,13 @@ def apply_ops(path: str, ops: list[dict], output: str | None = None, dry_run: St
 
 
 @mcp.tool()
-def highlight(path: str, page: int, match: str, style: str = "highlight", output: str | None = None) -> dict:
+def highlight(
+    path: str,
+    page: int,
+    match: str,
+    style: str = "highlight",
+    output: str | None = None,
+) -> dict:
     """Highlight (or underline/strikeout/squiggly) every occurrence of
     `match` on `page`."""
     return engine.apply(
@@ -70,7 +161,14 @@ def highlight(path: str, page: int, match: str, style: str = "highlight", output
 
 
 @mcp.tool()
-def add_note(path: str, page: int, x: float, y: float, text: str, output: str | None = None) -> dict:
+def add_note(
+    path: str,
+    page: int,
+    x: float,
+    y: float,
+    text: str,
+    output: str | None = None,
+) -> dict:
     """Attach a sticky-note comment at (x, y) on `page`."""
     return engine.apply(
         path, [{"op": "note", "page": page, "at": [x, y], "text": text}], output=output
@@ -78,7 +176,12 @@ def add_note(path: str, page: int, x: float, y: float, text: str, output: str | 
 
 
 @mcp.tool()
-def fill_field(path: str, field: str, value: str, output: str | None = None) -> dict:
+def fill_field(
+    path: str,
+    field: str,
+    value: str,
+    output: str | None = None,
+) -> dict:
     """Fill one form field by name. Errors list the document's real field
     names if the name doesn't match."""
     return engine.apply(
@@ -352,15 +455,26 @@ def add_shape(
 
 
 @mcp.tool()
-def flatten_pdf(path: str, output: str | None = None) -> dict:
+def flatten_pdf(
+    path: str,
+    output: str | None = None,
+    confirm: StrictBool = False,
+) -> dict:
     """Bake all annotations and form fields into page content (irreversible
     in the output file; the input is preserved when `output` is given).
 
     Refuses when pending PDF redaction annotations exist — baking their
     appearance does not remove the underlying text. Apply a reviewed redact
-    or delete those annotations first.
+    or delete those annotations first. Defaults to dry-run — pass confirm=true
+    after the user approves.
     """
-    return engine.flatten(path, output=output)
+    confirm = _strict_bool(confirm, "confirm")
+    result = engine.flatten(path, output=output, dry_run=not confirm)
+    if not confirm:
+        result["needs_confirmation"] = (
+            "Dry run only. Re-call with confirm=true after the user approves flattening."
+        )
+    return result
 
 
 def main() -> None:

@@ -228,17 +228,18 @@ Focus rule: if the sidebar has a page selection, keys apply to pages. Otherwise 
 
 ```
 omepreview pages input.pdf --list
-omepreview pages input.pdf --delete 1,4-6 -o out.pdf
+omepreview pages input.pdf --delete 1,4-6 -o out.pdf --confirm
 omepreview pages input.pdf --rotate 90 --pages 2,3 -o out.pdf
 omepreview pages input.pdf --move 5-6 --after 1 -o out.pdf
 omepreview pages dest.pdf --insert src.pdf --src-pages 1-3 --after 2 -o out.pdf
 omepreview pages dest.pdf --blank --after 0 -o out.pdf
 omepreview pages in.pdf --extract 2-5 -o excerpt.pdf
-omepreview redact in.pdf --page 1 --match "SSN" -o out.pdf
-omepreview redact in.pdf --page 1 --rect 72,400,300,430 -o out.pdf
+omepreview redact in.pdf --page 1 --match "SSN" -o out.pdf --confirm
+omepreview redact in.pdf --page 1 --rect 72,400,300,430 -o out.pdf --confirm
 ```
 
-`--dry-run --json` on all of the above.
+`--dry-run --json` is available on all of the above. Consequential edits also
+require `--confirm` to commit.
 
 ### 4.2 MCP tools
 

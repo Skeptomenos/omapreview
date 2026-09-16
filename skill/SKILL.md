@@ -5,15 +5,20 @@ description: Do anything with a PDF that a person would ask an assistant to do �
 
 # omepreview — the PDF assistant playbook
 
-omepreview edits PDFs through a JSON op engine (`omepreview`` CLI; the `omepreview`` MCP
+omepreview edits PDFs through a JSON op engine (`omepreview` CLI; the `omepreview` MCP
 server exposes the same engine). Treat ANY request a person would make about
 a paper document as executable: if a human with a pen and a highlighter could
 do it, you can do it — and you can also *look at the page* to work precisely.
 
 Ops: `highlight` (styles: highlight/underline/strikeout/squiggly), `note`
 (sticky comment), `text_box` (visible text), `fill_field`, `place_signature`,
-`ink` (freehand strokes / marks). Coordinates are PDF points, origin
-top-left; pages are 1-based; bboxes from `read` feed straight back into ops.
+`ink` (freehand strokes / marks), page surgery, redaction, shapes and crops.
+Coordinates are PDF points, origin top-left; pages are 1-based; bboxes from
+`read` feed straight back into ops. Run `omepreview operations` or MCP
+`operation_schema` before constructing a generic batch.
+
+The MCP server is optional. Install it with `pip install -e '.[mcp]'` and
+start `omepreview-mcp` on stdio; see the [MCP setup guide](../README.md#mcp).
 
 ## The precision ladder
 
@@ -29,14 +34,20 @@ as the task needs:
    empty regions, "next to the logo", column layouts):
    `omepreview snapshot doc.pdf --page N --grid 50` → Read the PNG → the labeled
    grid IS the ops coordinate system. Pick numbers off it.
-3. **Dry-run.** Every edit command takes `--dry-run --json` and returns
-   resolved geometry without writing. Sanity-check rects fit the page and
-   don't cover content you must keep readable.
-4. **Verify after writing.** For anything nontrivial, write to a copy
-   (`-o out.pdf`), then `omepreview snapshot out.pdf --page N` (no grid) and
-   *look at the result*. Wrong spot, overlapping text, too big? Fix the op
-   and re-apply to a fresh copy from the original. Never ship what you
-   haven't seen.
+3. **Propose consequential edits.** Use `--dry-run --json` for any edit when
+   you need to inspect its resolved geometry. Signing, redaction, deletion,
+   flattening and generic batches containing them default to no-write; pass
+   `--confirm` (or MCP `confirm=true`, `confirmed=true` for signatures, or
+   `dry_run=false` for `apply_ops`) only after approval. Ordinary markup and
+   page-order commands keep their existing write behavior unless `--dry-run`
+   is present.
+4. **Verify after writing.** Write to the intended destination (`-o out.pdf`),
+   then read the saved output and render it without the grid:
+   `omepreview read out.pdf --json`, `omepreview pages out.pdf --list`, and
+   `omepreview snapshot out.pdf --page N`. Use MCP `read_pdf`, `list_pages`
+   and `render_page` for an MCP-only workflow. Compare the returned source
+   fingerprint. Wrong spot, overlapping text, stale output or missing content?
+   Report the failed check and repair from the original.
 5. **Ghost handoff.** For placements where taste matters (signatures, stamps
    on a designed page) or when the user should have final say: write the
    proposed ops to JSON and `setsid -f omepreview edit doc.pdf --ops proposal.json`
@@ -69,7 +80,7 @@ unknown fields empty and list them for the user. No AcroForm fields? Use
 
 **Sign / initial** — signature lines come from field rects (`signature`
 type), "SIGNATURE"/"Sign here"/"X___" labels, or the grid snapshot. Dry-run,
-then apply, then verify with a snapshot. "Initial every page": a saved
+then apply with `--confirm`, then verify with a snapshot. "Initial every page": a saved
 `initials` signature (`omepreview sig add ... --name initials`) placed at a
 consistent corner on every page in one batch. Never place a signature the
 user hasn't asked for; offer the ghost handoff when placement is aesthetic.
@@ -95,7 +106,7 @@ removals) and summarize.
 
 **Send it somewhere** — the agent is the share sheet. When connected tools
 allow (email, Slack, etc.), "sign it and send it to X" is one flow: finalize
-(usually `flatten -o final.pdf`), attach, send — confirming recipient and
+(usually `flatten -o final.pdf --confirm`), attach, send — confirming recipient and
 message before sending, and reporting exactly what was sent. Humans also have
 a Share menu in `omepreview edit` (email attach, LocalSend, copy-file,
 show-in-folder).
@@ -118,7 +129,7 @@ show-in-folder).
   is named in the error. Unsupported intersecting annot types fail closed —
   do not report a successful redact while a payload remains. Ink/black boxes
   are not redact.
-- **Finish for sending:** offer `omepreview flatten out.pdf -o final.pdf` when
+- **Finish for sending:** offer `omepreview flatten out.pdf -o final.pdf --confirm` when
   the copy is going to someone else; keep the unflattened version. Flatten
   refuses if the file still has pending PDF redaction annotations — apply a
   reviewed `redact` first; do not treat flatten as apply-redactions.

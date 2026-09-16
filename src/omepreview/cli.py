@@ -25,6 +25,8 @@ from .ops import (
     MAX_SIGNATURE_WIDTH,
     MAX_STROKE_WIDTH,
     OpError,
+    operation_catalog,
+    validate_all,
 )
 from .render import MAX_GRID_STEP, MAX_SNAPSHOT_SCALE, MIN_GRID_STEP, MIN_SNAPSHOT_SCALE
 
@@ -152,12 +154,43 @@ def _emit_human(data):
 
 def _out_args(p: argparse.ArgumentParser):
     p.add_argument("-o", "--output", help="write result here (default: edit in place)")
-    p.add_argument("--dry-run", action="store_true", help="resolve and report, write nothing")
+    confirmation = p.add_mutually_exclusive_group()
+    confirmation.add_argument(
+        "--dry-run", action="store_true", help="resolve and report, write nothing"
+    )
+    confirmation.add_argument(
+        "--confirm",
+        action="store_true",
+        help="commit a consequential edit after the user approves it",
+    )
     p.add_argument("--json", action="store_true", help="machine-readable report")
 
 
+_CONSEQUENTIAL_OPS = frozenset(
+    {"place_signature", "redact", "delete_annotation", "delete_pages"}
+)
+
+
+def _edit_plan(args, op_list: list[dict]) -> tuple[list[dict], bool, bool]:
+    """Keep normal edits compatible while making consequential edits opt-in."""
+    validated = validate_all(op_list)
+    consequential = any(op["op"] in _CONSEQUENTIAL_OPS for op in validated)
+    if getattr(args, "dry_run", False):
+        return validated, consequential, True
+    return (
+        validated,
+        consequential,
+        consequential and not getattr(args, "confirm", False),
+    )
+
+
 def _run_edit(args, op_list):
-    result = engine.apply(args.pdf, op_list, output=args.output, dry_run=args.dry_run)
+    validated, consequential, dry_run = _edit_plan(args, op_list)
+    result = engine.apply(args.pdf, validated, output=args.output, dry_run=dry_run)
+    if dry_run and consequential:
+        result["needs_confirmation"] = (
+            "Dry run only. Re-run with --confirm after the user approves."
+        )
     _emit(result, args.json)
 
 
@@ -256,7 +289,12 @@ def cmd_shape(args):
 
 
 def cmd_flatten(args):
-    result = engine.flatten(args.pdf, output=args.output)
+    dry_run = getattr(args, "dry_run", False) or not getattr(args, "confirm", False)
+    result = engine.flatten(args.pdf, output=args.output, dry_run=dry_run)
+    if dry_run:
+        result["needs_confirmation"] = (
+            "Dry run only. Re-run with --confirm after the user approves flattening."
+        )
     _emit(result, args.json)
 
 
@@ -374,7 +412,12 @@ def cmd_pages(args):
 
     extract_only = len(op_list) == 1 and op_list[0]["op"] == "extract_pages"
     output = None if extract_only else args.output
-    result = engine.apply(args.pdf, op_list, output=output, dry_run=args.dry_run)
+    validated, consequential, dry_run = _edit_plan(args, op_list)
+    result = engine.apply(args.pdf, validated, output=output, dry_run=dry_run)
+    if dry_run and consequential:
+        result["needs_confirmation"] = (
+            "Dry run only. Re-run with --confirm after the user approves."
+        )
     _emit(result, args.json)
 
 
@@ -382,9 +425,19 @@ def cmd_snapshot(args):
     from . import render
 
     result = render.snapshot(
-        args.pdf, page=args.page, output=args.output, grid=args.grid, scale=args.scale
+        args.pdf,
+        page=args.page,
+        output=args.output,
+        grid=args.grid,
+        scale=args.scale,
+        clip=args.clip,
     )
     _emit(result, True)
+
+
+def cmd_operations(args):
+    """Print the complete operation catalog for CLI and agent discovery."""
+    _emit(operation_catalog(), True)
 
 
 def _cli_prog() -> str:
@@ -413,6 +466,13 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("fields", help="list form fields (JSON)")
     p.add_argument("pdf")
     p.set_defaults(func=cmd_fields)
+
+    p = sub.add_parser(
+        "operations",
+        aliases=["ops", "operation-schema"],
+        help="print the complete operation catalog (JSON)",
+    )
+    p.set_defaults(func=cmd_operations)
 
     p = sub.add_parser("apply", help="apply an ops JSON file (or - for stdin)")
     p.add_argument("pdf")
@@ -524,6 +584,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("pdf")
     p.add_argument("-o", "--output")
+    confirmation = p.add_mutually_exclusive_group()
+    confirmation.add_argument(
+        "--dry-run", action="store_true", help="resolve and report, write nothing"
+    )
+    confirmation.add_argument(
+        "--confirm",
+        action="store_true",
+        help="commit flattening after the user approves it",
+    )
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_flatten)
 
@@ -598,6 +667,11 @@ def build_parser() -> argparse.ArgumentParser:
         type=_snapshot_scale,
         default=2.0,
         help=f"raster scale ({MIN_SNAPSHOT_SCALE:g}..{MAX_SNAPSHOT_SCALE:g}; 2 = 144 dpi)",
+    )
+    p.add_argument(
+        "--clip",
+        type=_rect,
+        help="X0,Y0,X1,Y1 in unrotated CropBox-local points",
     )
     p.add_argument("-o", "--output")
     p.set_defaults(func=cmd_snapshot)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 from pathlib import Path
 
@@ -39,7 +40,8 @@ def list_pages(pdf: str | Path) -> dict:
     pdf = Path(pdf)
     if not pdf.is_file():
         raise FileNotFoundError(f"no such PDF: {pdf}")
-    doc = pymupdf.open(str(pdf))
+    blob = pdf.read_bytes()
+    doc = pymupdf.open(stream=blob, filetype="pdf")
     try:
         if doc.needs_pass:
             raise OpError(f"{pdf} is password-protected; decrypt it first")
@@ -52,6 +54,15 @@ def list_pages(pdf: str | Path) -> dict:
                     "rotation": page.rotation,
                 }
             )
-        return {"path": str(pdf), "page_count": doc.page_count, "pages": pages}
+        return {
+            "path": str(pdf),
+            "source_fingerprint": {
+                "algorithm": "sha256",
+                "value": hashlib.sha256(blob).hexdigest(),
+                "bytes": len(blob),
+            },
+            "page_count": doc.page_count,
+            "pages": pages,
+        }
     finally:
         doc.close()

@@ -118,6 +118,7 @@ def test_cli_delete_annotation(marked_pdf, tmp_path):
             "0",
             "-o",
             str(out),
+            "--confirm",
             "--json",
         ],
         capture_output=True,

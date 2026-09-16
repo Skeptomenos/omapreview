@@ -12,6 +12,8 @@ Each op is available through `omepreview apply --ops file.json` and MCP
 
 | Op | CLI | MCP |
 |----|-----|-----|
+| Discovery | `omepreview operations` | `operation_schema` |
+| Page render | `omepreview snapshot FILE` | `render_page` (PNG + metadata) |
 | Page list | `omepreview pages FILE --list` | `list_pages` |
 | Page surgery | `omepreview pages FILE --delete …` etc. | `delete_pages`, `rotate_pages`, `move_pages`, `insert_pages`, `extract_pages`, `crop_pages` |
 | Crop page | `omepreview crop FILE --page N --rect …` | `crop_pages` |
@@ -23,6 +25,75 @@ Consequential MCP tools (`place_signature`, `delete_pages`, `redact`,
 `delete_annotation`) default to dry-run; pass `confirm=true` (or
 `confirmed=true` for signatures) after human approval. The generic
 `apply_ops` tool also defaults to dry-run; pass `dry_run=false` after approval.
+
+The CLI keeps its existing write behavior for ordinary markup, form, page
+ordering, insertion, extraction, shape and crop operations. `--dry-run` is
+available for every edit command. A consequential operation (`sign`,
+`redact`, `delete-annotation`, page deletion, or a generic batch containing
+one of these) also defaults to a proposal; pass `--confirm` to write it.
+`flatten` follows the same `--dry-run` / `--confirm` rule. The command names
+did not change. For example:
+
+```bash
+# Before: this wrote the redacted copy.
+omepreview redact doc.pdf --page 1 --match "SECRET" -o out.pdf
+
+# Now: the first command only resolves the target; this one commits it.
+omepreview redact doc.pdf --page 1 --match "SECRET" -o out.pdf --json
+omepreview redact doc.pdf --page 1 --match "SECRET" -o out.pdf --confirm --json
+```
+
+## Discovery and rendering
+
+`omepreview operations` and MCP `operation_schema` return the same versioned
+catalog. It covers every `ops.py` operation, all variants, required fields,
+defaults, numeric bounds and examples. Use the catalog before constructing a
+generic batch. Dedicated wrappers are convenience routes; text boxes, ink,
+check/cross marks and any other catalog operation use the generic route.
+
+The MCP server is optional. Install it with `pip install -e '.[mcp]'`, then
+start `omepreview-mcp` on the stdio transport. See the [MCP setup guide](../README.md#mcp).
+
+`omepreview snapshot FILE --page N --scale 2 --grid 50 --clip X0,Y0,X1,Y1`
+writes a PNG for a human or agent to inspect. `render_page` accepts the same
+page, scale, grid and clip values but has no output path and keeps the source
+read-only. Its response contains an actual `image/png` content block and a
+JSON text block. The metadata includes the SHA-256 source fingerprint, page
+and page-count, mediabox/CropBox, rotation, canonical clip, displayed clip,
+pixel dimensions and the affine transform from unrotated CropBox-local PDF
+points to top-left PNG pixels. CLI `snapshot` preserves its historical
+displayed-page `size` field and also exposes the canonical `pdf_geometry`.
+
+Clips use `[x0,y0,x1,y1]` in unrotated CropBox-local points. Their width and
+height must be strictly positive; `x0` and `y0` may be zero. The clip must be
+inside the CropBox. Scale is 0.05–4, grid is 1–10,000,
+each image side is at most 16,384 pixels, the image is at most 40,000,000
+pixels and the encoded PNG is at most 8,000,000 bytes. Rendering rejects bad
+or oversized dimension, pixel or grid requests before drawing/allocation. The
+raw PNG byte check happens after encoding. MCP then caps the base64 image
+payload at 10,666,668 bytes before returning it. Both interfaces preserve the
+PDF bytes.
+
+## Post-save observation
+
+Read the destination after every write. Use `omepreview read OUT --json` or
+MCP `read_pdf` for text, fields, annotation types, content and geometry. Use
+`omepreview pages OUT --list` or MCP `list_pages` for count, order, size and
+rotation. Use `omepreview snapshot OUT` or MCP `render_page` without a grid
+for appearance. These reads include a source fingerprint; compare it with
+the render metadata so the image and structured observation refer to the same
+saved bytes. A successful apply report, file existence or attractive preview
+is not by itself verification.
+
+| Task | Fresh saved-output observation |
+|---|---|
+| Markup, text box, ink, shape, delete annotation | `read`/`read_pdf` plus a no-grid `snapshot`/`render_page` |
+| Fill field | `read`/`read_pdf` field value and a no-grid render |
+| Signature | no-grid render of the saved page; confirm position, size, date and readable protected text |
+| Page surgery | `pages`/`list_pages` plus affected and unchanged control-page renders |
+| Extract, crop | read/render the destination and compare the extract source fingerprint |
+| Redact | the engine's serialized redaction/payload gate and `verify` report must pass, then a fresh read confirms targeted content is absent and a render confirms appearance; a black cover is not proof |
+| Flatten | fresh read confirms annotations/widgets are baked and before/after renders retain appearance |
 
 ## Conventions
 
@@ -226,11 +297,12 @@ If the page already has pending redaction annotations, `apply_now` (the
 default) refuses rather than also applying those unapproved regions.
 
 **Flatten** (`omepreview flatten FILE [-o OUT]`, MCP `flatten_pdf`) bakes
-annotations and form widgets into page content. It **refuses** when any page
-still has a PDF redaction annotation: baking the black box does not remove
-the underlying text. Apply a reviewed `redact` (`apply_now`) or delete those
-annotations first. Flatten never silently `apply_redactions()` — that would
-apply unapproved regions.
+annotations and form widgets into page content. It defaults to a proposal;
+pass CLI `--confirm` or MCP `confirm=true` to commit. It **refuses** when any
+page still has a PDF redaction annotation: baking the black box does not
+remove the underlying text. Apply a reviewed `redact` (`apply_now`) or delete
+those annotations first. Flatten never silently `apply_redactions()` — that
+would apply unapproved regions.
 
 **Pen / ink is not redact.** Drawing a black ink stroke or rectangle overlay
 covers content visually but leaves the underlying text in `get_text()` /

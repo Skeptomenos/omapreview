@@ -775,7 +775,12 @@ def _pages_with_redact_annots(doc: pymupdf.Document) -> list[int]:
     return pages
 
 
-def flatten(pdf: str | Path, output: str | Path | None = None) -> dict:
+def flatten(
+    pdf: str | Path,
+    output: str | Path | None = None,
+    *,
+    dry_run: bool = False,
+) -> dict:
     """Bake annotations and form fields into page content.
 
     Use before sending to recipients whose viewers mishandle annotations, or
@@ -807,10 +812,28 @@ def flatten(pdf: str | Path, output: str | Path | None = None) -> dict:
                 "bake the redaction appearance while leaving the underlying "
                 "text extractable."
             )
+        page_count = doc.page_count
+        annotation_count = sum(len(list(page.annots() or [])) for page in doc)
+        widget_count = sum(len(list(page.widgets() or [])) for page in doc)
+        if dry_run:
+            doc.close()
+            return {
+                "output": None,
+                "flattened": False,
+                "page_count": page_count,
+                "annotation_count": annotation_count,
+                "widget_count": widget_count,
+            }
         doc.bake(annots=True, widgets=True)
         _save(doc, pdf, main_output)
     except BaseException:
         if not doc.is_closed:
             doc.close()
         raise
-    return {"output": output_display}
+    return {
+        "output": output_display,
+        "flattened": True,
+        "page_count": page_count,
+        "annotation_count": annotation_count,
+        "widget_count": widget_count,
+    }
