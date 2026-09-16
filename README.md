@@ -84,6 +84,24 @@ python -m venv --system-site-packages .venv
 .venv/bin/omapreview edit
 ```
 
+## Make omapreview your default PDF editor
+
+After installing on Arch / Omarchy, run this as your normal user, without sudo:
+
+```bash
+xdg-mime default omapreview.desktop application/pdf
+```
+
+Check the default:
+
+```bash
+xdg-mime query default application/pdf
+```
+
+The result should be `omapreview.desktop`. PDFs opened from your file manager
+or with `xdg-open` will then use omapreview. The installer leaves your existing
+default unchanged until you choose to change it.
+
 ## Editor shortcuts
 
 | Shortcut | Action |
