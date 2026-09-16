@@ -12,7 +12,7 @@ Canonical playbook. `CLAUDE.md` is a symlink to this file.
 - Setup: `python -m venv --system-site-packages .venv` — plain venv hides system `gi`, breaks the editor.
 - Install (checkout): `.venv/bin/pip install -e '.[dev]'` or `bash packaging/install-user.sh`
 - Visitor (Arch/Omarchy, no clone): `curl -fsSL https://github.com/Skeptomenos/omapreview/releases/download/v0.1.1/install.sh | bash`
-- Test: `.venv/bin/python -m pytest tests/ -q` — must exit 0. Generates own PDFs, runs <1s.
+- Test: `.venv/bin/python -m pytest tests/ -q` — must exit 0. Generates synthetic PDFs.
 - Editor: `omapreview edit` opens **empty**; `omapreview edit file.pdf` opens that file. Open from the app is Ctrl+O. Desktop `Exec` is `omapreview edit %f` — do not put a file picker in Exec.
 
 ## Navigate
