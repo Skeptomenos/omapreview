@@ -101,11 +101,11 @@ def _query(command, control=None):
         while True:
             if control:
                 control.check()
-            chunk = os.read(process.stdout.fileno(), 65536) if _readable(process.stdout) else b''
-            chunks.extend(chunk)
+            chunk = os.read(process.stdout.fileno(), 65536) if _readable(process.stdout) else None
+            chunks.extend(chunk or b'')
             if len(chunks) > 256 * 1024:
                 raise ValueError("Dependency query output exceeded its bound")
-            if not chunk and process.poll() is not None:
+            if chunk == b'' and process.poll() is not None:
                 if process.returncode:
                     raise ValueError("Dependency query failed")
                 return chunks.decode(errors='replace').strip()

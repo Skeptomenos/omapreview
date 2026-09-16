@@ -497,3 +497,17 @@ def test_image_resolution_damage_fails(tmp_path,monkeypatch,fake_backend):
             p=doc.new_page(width=72,height=72);p.insert_image(p.rect,pixmap=pix);doc.save(output)
     monkeypatch.setattr(ocr,'_run_worker',damage)
     failure('verification_failed',lambda:request(source,target),target)
+
+
+def test_query_drains_child_exit_race(monkeypatch):
+    ready=ocr._readable;delayed=[]
+    def delayed_readiness(pipe):
+        state=ready(pipe)
+        if not state and not delayed:
+            delayed.append(True)
+            # The child writes and exits between select and the parent's poll.
+            time.sleep(.2)
+        return state
+    monkeypatch.setattr(ocr,'_readable',delayed_readiness)
+    result=ocr._query([sys.executable,'-c','import time;time.sleep(.05);print("17.11.0")'])
+    assert delayed and result=='17.11.0'
