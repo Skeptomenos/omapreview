@@ -361,7 +361,10 @@ def test_preview_scratch_is_private(tmp_path, umask_022):
 
 
 def test_signature_store_is_private(tmp_path, monkeypatch, umask_022):
-    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv(
+        "OMEPREVIEW_SIGNATURE_DIR",
+        str(tmp_path / "signature-store"),
+    )
     svg = tmp_path / "jane.svg"
     svg.write_text(
         '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="30">'

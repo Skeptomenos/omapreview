@@ -12,17 +12,30 @@ existing default.svg still places.
 
 from __future__ import annotations
 
+import math
 import os
-import shutil
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from .fs_privacy import chmod_private_file, ensure_private_dir
+from .fs_privacy import atomic_write_private, ensure_private_dir
 
 _SUFFIXES = (".svg", ".png")
 
 
 def store_dir(*, create: bool = True) -> Path:
-    """Writable store: ~/Downloads/omapreview/signature/ (mode 0700)."""
+    """Writable store: ``~/Downloads/omapreview/signature/`` (mode 0700).
+
+    ``OMEPREVIEW_SIGNATURE_DIR`` is a narrow portable/test override.  It lets
+    isolated CLI and protocol tests use synthetic stores without changing the
+    user's HOME or writing to the real Downloads directory.
+    """
+    override = os.environ.get("OMEPREVIEW_SIGNATURE_DIR")
+    if override:
+        d = Path(override).expanduser()
+        if create:
+            ensure_private_dir(d)
+        return d
+
     downloads = Path.home() / "Downloads"
     d = downloads / "omapreview" / "signature"
     if create:
@@ -34,6 +47,11 @@ def store_dir(*, create: bool = True) -> Path:
 
 def legacy_store_dir() -> Path:
     """Read-only fallback: ~/.config/omepreview/signatures/."""
+    override = os.environ.get("OMEPREVIEW_SIGNATURE_DIR")
+    if override:
+        # Test/portable overrides are complete stores.  Do not leak entries
+        # from the user's Downloads or XDG config into an isolated run.
+        return Path(override).expanduser()
     base = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
     return base / "omepreview" / "signatures"
 
@@ -51,6 +69,55 @@ def _file_in(directory: Path, name: str) -> Path | None:
     if png.is_file():
         return png
     return None
+
+
+def _same_file_or_path(first: Path, second: Path) -> bool:
+    """Return whether two paths resolve to the same directory entry."""
+    if first.absolute().resolve(strict=False) == second.absolute().resolve(strict=False):
+        return True
+    try:
+        return os.path.samefile(first, second)
+    except OSError:
+        return False
+
+
+def _decode_candidate(source: Path, data: bytes, suffix: str) -> None:
+    """Decode a signature completely before any stored asset is replaced."""
+    import pymupdf
+
+    try:
+        if suffix == ".svg":
+            root = ET.fromstring(data)
+            if root.tag.rsplit("}", 1)[-1] != "svg":
+                raise ValueError("root element must be <svg>")
+            doc = pymupdf.open(stream=data, filetype="svg")
+            try:
+                if doc.page_count < 1:
+                    raise ValueError("SVG contains no drawable page")
+                rect = doc[0].rect
+                if not all(
+                    math.isfinite(value) and value > 0
+                    for value in (rect.width, rect.height)
+                ):
+                    raise ValueError(
+                        f"SVG geometry must be finite and positive, got {rect.width}x{rect.height}"
+                    )
+                converted = doc.convert_to_pdf()
+            finally:
+                doc.close()
+            rendered = pymupdf.open(stream=converted, filetype="pdf")
+            try:
+                if rendered.page_count < 1:
+                    raise ValueError("SVG conversion produced no page")
+                rendered[0].get_pixmap()
+            finally:
+                rendered.close()
+        else:
+            pix = pymupdf.Pixmap(data)
+            if pix.width < 1 or pix.height < 1:
+                raise ValueError("PNG has no pixels")
+    except Exception as exc:
+        raise ValueError(f"invalid signature {source}: {exc}") from exc
 
 
 def path_for(name: str) -> Path:
@@ -79,12 +146,25 @@ def add(source: str | Path, name: str = "default") -> Path:
             "signatures must be SVG (recorder default) or PNG to import"
         )
     _validate_name(name)
+    data = source.read_bytes()
+    _decode_candidate(source, data, suffix)
     dest_dir = store_dir(create=True)
     dest = dest_dir / f"{name}{suffix}"
-    shutil.copyfile(source, dest)
-    chmod_private_file(dest)
     other = ".png" if suffix == ".svg" else ".svg"
-    (dest_dir / f"{name}{other}").unlink(missing_ok=True)
+    other_path = dest_dir / f"{name}{other}"
+    if _same_file_or_path(source, dest):
+        if source.suffix.lower() != suffix:
+            raise ValueError(
+                f"signature source {source} aliases the stored asset with a different format"
+            )
+        return dest
+    atomic_write_private(dest, data)
+    try:
+        other_path.unlink(missing_ok=True)
+    except OSError as exc:
+        raise OSError(
+            f"saved valid signature to {dest}, but could not remove old {other_path}: {exc}"
+        ) from exc
     return dest
 
 

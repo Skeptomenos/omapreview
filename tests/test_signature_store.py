@@ -11,8 +11,18 @@ from omepreview.draw import render_pad_png
 from omepreview.trackpad_sig import RecorderSession
 
 
+@pytest.fixture(autouse=True)
+def isolated_signature_environment(tmp_path, monkeypatch):
+    """Keep store and legacy lookup inside this test's synthetic directory."""
+    monkeypatch.setenv(
+        "OMEPREVIEW_SIGNATURE_DIR",
+        str(tmp_path / "Downloads" / "omapreview" / "signature"),
+    )
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    return tmp_path / "Downloads" / "omapreview" / "signature"
+
+
 def test_add_and_list_svg(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path))
     svg = tmp_path / "jane.svg"
     svg.write_text(
         '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="30">'
@@ -34,7 +44,6 @@ def test_add_and_list_svg(tmp_path, monkeypatch):
 
 
 def test_png_import_still_accepted(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path))
     pix = pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 40, 16), True)
     png = tmp_path / "old.png"
     pix.save(str(png))
@@ -45,7 +54,7 @@ def test_png_import_still_accepted(tmp_path, monkeypatch):
 
 
 def test_get_falls_back_to_legacy_config_dir(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("OMEPREVIEW_SIGNATURE_DIR")
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
     legacy = tmp_path / "cfg" / "omepreview" / "signatures"
     legacy.mkdir(parents=True)
@@ -62,8 +71,11 @@ def test_get_falls_back_to_legacy_config_dir(tmp_path, monkeypatch):
 
 
 def test_downloads_store_wins_over_legacy(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("OMEPREVIEW_SIGNATURE_DIR")
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+    store = tmp_path / "Downloads" / "omapreview" / "signature"
+    store.mkdir(parents=True)
+    monkeypatch.setattr(signature, "store_dir", lambda *, create=True: store)
     legacy = tmp_path / "cfg" / "omepreview" / "signatures"
     legacy.mkdir(parents=True)
     (legacy / "default.svg").write_text(
@@ -82,8 +94,10 @@ def test_downloads_store_wins_over_legacy(tmp_path, monkeypatch):
 
 
 def test_remove_deletes_legacy_copy(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("OMEPREVIEW_SIGNATURE_DIR")
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+    store = tmp_path / "Downloads" / "omapreview" / "signature"
+    monkeypatch.setattr(signature, "store_dir", lambda *, create=True: store)
     legacy = tmp_path / "cfg" / "omepreview" / "signatures"
     legacy.mkdir(parents=True)
     (legacy / "old.svg").write_text("<svg/>", encoding="utf-8")

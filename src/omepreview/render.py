@@ -8,13 +8,16 @@ the grid IS the ops coordinate system.
 
 from __future__ import annotations
 
-import math
 import hashlib
+import math
+import os
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
 import pymupdf
+
+from .fs_privacy import atomic_write_private
 
 GRID_COLOR = (0.85, 0.2, 0.2)
 MIN_GRID_STEP = 1.0
@@ -362,7 +365,13 @@ def snapshot(
     if output is None:
         suffix = f"-p{page}-grid.png" if grid is not None else f"-p{page}.png"
         output = pdf.with_name(pdf.stem + suffix)
-    Path(output).write_bytes(png)
+    output_path = Path(output)
+    if _same_file_or_path(pdf, output_path):
+        raise ValueError(
+            f"snapshot output {output_path} aliases source {pdf}; "
+            "choose a separate PNG path"
+        )
+    atomic_write_private(output_path, png)
     return {
         "output": str(output),
         "page": page,
@@ -384,6 +393,16 @@ def snapshot(
         "grid_labels": metadata.get("grid_labels"),
         "scale": scale,
     }
+
+
+def _same_file_or_path(first: Path, second: Path) -> bool:
+    """Reject exact, symlink and hard-link aliases before publishing output."""
+    if first.absolute().resolve(strict=False) == second.absolute().resolve(strict=False):
+        return True
+    try:
+        return os.path.samefile(first, second)
+    except OSError:
+        return False
 
 
 def _draw_grid(
