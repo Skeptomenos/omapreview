@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Visitor install for omapreview 0.1.1 (no git clone of the app repo).
+# Visitor install for omapreview 0.2.0 (no git clone of the app repo).
 # Arch / Omarchy: pacman deps, GitHub release asset, ~/.local command + desktop.
 #
-#   curl -fsSL https://github.com/Skeptomenos/omapreview/releases/download/v0.1.1/install.sh | bash
+#   curl -fsSL https://github.com/Skeptomenos/omapreview/releases/download/v0.2.0/install.sh | bash
 set -euo pipefail
 
 extras=()
@@ -15,7 +15,7 @@ for option in "$@"; do
   esac
 done
 
-VERSION="0.1.1"
+VERSION="0.2.0"
 # This release asset is built from the verified application tree so
 # Super+Space opens an empty editor without requiring a git clone.
 TARBALL_URL="https://github.com/Skeptomenos/omapreview/releases/download/v${VERSION}/omapreview-${VERSION}-src.tar.gz"
